@@ -222,6 +222,7 @@ function ensureProgressOverlay() {
       <div style="margin-top:8px; font-size:12px;" id="ppc_prog_details"></div>
       <div style="margin-top:12px; display:flex; gap:8px;">
         <button class="ppc-btn" id="ppc_cancel_crawl" style="background:#7f1d1d;">Cancel</button>
+        <button class="ppc-btn" id="ppc_stop_and_summarize" style="background:#6d28d9;">Stop & Summarize Now</button>
       </div>
     </div>`;
   document.body.appendChild(progressEl);
@@ -230,6 +231,11 @@ function ensureProgressOverlay() {
       // For now just remove overlay; background will see cancelled flag when implemented
       progressEl.remove(); progressEl=null;
     });
+  });
+  progressEl.querySelector('#ppc_stop_and_summarize').addEventListener('click', () => {
+    // Keep overlay; background will respond with finished message which replaces overlay with results
+    safeSendMessage({ type: 'PPC_STOP_AND_SUMMARIZE' });
+    progressEl.querySelector('#ppc_prog_status').textContent = 'Stopping & summarizing…';
   });
   return progressEl;
 }

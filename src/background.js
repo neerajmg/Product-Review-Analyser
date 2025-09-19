@@ -623,6 +623,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           await finalizeCrawl('cancelled');
         }
         sendResponse({ ok: true, cancelled: true });
+      } else if (msg.type === 'PPC_STOP_AND_SUMMARIZE') {
+        // User requested early stop with summary of pages crawled so far.
+        const state = await getCrawlState();
+        if (!state) { sendResponse({ ok:false, error:'No active crawl' }); return; }
+        if (state.finished) { // Already finished, just echo existing summary
+          await finalizeCrawl(state.finishedReason || 'completed');
+          sendResponse({ ok:true, alreadyFinished:true });
+          return;
+        }
+        // Mark as finished and summarize current aggregation.
+        await finalizeCrawl('manual-stop');
+        sendResponse({ ok:true, stopped:true });
       } else if (msg.type === 'PPC_UNDO_SUMMARY') {
         let state = await getCrawlState();
         if (!state || !state.previousSummary) return sendResponse({ ok:false, error:'No previous summary' });
