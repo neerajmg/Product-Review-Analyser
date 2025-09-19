@@ -6,7 +6,6 @@ This repository contains the initial scaffold for a Chrome extension that:
 - Produces an unbiased pros/cons summary (mock Gemini + deterministic fallback)
 - Prepares for a safe, consent-gated deep crawl (foreground, resumable) per `build_instructions.md`
 
-> Authoritative specification: See `build_instructions.md` in this project root. All implementation decisions derive from that file.
 
 ## Current Status (Scaffold)
 
@@ -36,7 +35,7 @@ The extension can operate in two modes:
 
 Steps to provide and validate your key:
 
-1. Visit <https://aistudio.google.com/app/apikey> and create a Gemini API key.
+1. Visit [https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) and create a Gemini API key.
 2. Open the extension Options (right‑click icon > Options or from popup Settings).
 3. Paste the key into the Gemini API Key field, click Save, then click Validate Key.
 4. The Key Status indicator will update (VALID, INVALID, QUOTA EXHAUSTED, etc.).
@@ -54,9 +53,9 @@ The extension periodically re-checks the key (every ~6 hours) and before making 
 
 1. Load extension unpacked (`chrome://extensions`).
 2. Open a product page with reviews.
-3. Use popup > "Analyze Reviews (This Page)".
-4. View mock pros/cons.
-5. Toggle fallback mode in Options (Gemini path remains mocked until enabled in later commit).
+3. Use the popup button “Analyze Reviews (Deep Crawl Up To 30 Pages)”.
+4. Complete the consent modal; crawl will aggregate up to 30 pages or stop earlier when pages end.
+5. View pros/cons overlay. If no API key is set, local fallback summarizer is used.
 
 ## Testing
 

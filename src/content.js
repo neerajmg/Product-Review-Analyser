@@ -82,13 +82,12 @@ function injectDeepCrawlModal(robots) {
   panel.style.maxWidth = '700px';
   panel.innerHTML = `
     <h2 style="margin-top:0;">Deep Crawl — Read Carefully</h2>
-    <div style="font-size:14px; line-height:1.4; white-space:pre-wrap;">You are about to ask the extension to load and collect reviews from *every* review page available for this product. This may:\n\n- Trigger anti-bot protections (CAPTCHA or temporary block).\n- Use significant bandwidth and take several minutes or hours.\n- Potentially violate the site’s Terms of Service; you accept responsibility.\n\nCheck both boxes to continue:</div>
+    <div style="font-size:14px; line-height:1.4; white-space:pre-wrap;">You are about to ask the extension to load and collect reviews from *every* review page (up to a fixed limit of 30 pages) for this product. This may:\n\n- Trigger anti-bot protections (CAPTCHA or temporary block).\n- Use bandwidth and take several minutes.\n- Potentially violate the site’s Terms of Service; you accept responsibility.\n\nCheck both boxes to continue (robots.txt acknowledgement may be required):</div>
     <label style="display:block; margin-top:12px;"><input type="checkbox" id="ppc_c1"/> I confirm I understand the risks and that crawling is initiated from my browser for my personal use.</label>
     <label style="display:block; margin-top:6px;"><input type="checkbox" id="ppc_c2"/> I will not use this feature to collect data at scale for redistribution or commercial resale.</label>
     ${robots.disallowed ? `<label style='display:block; margin-top:6px; color:#7f1d1d;'><input type='checkbox' id='ppc_c_robots'/> I understand robots.txt disallows automated crawling but I wish to proceed for my personal use.</label>`: ''}
     <div style="margin-top:12px; font-size:12px; color:#555;">${robots.ok ? (robots.disallowed ? 'robots.txt indicates one or more Disallow rules may apply to this path.' : 'robots.txt fetched: no disallow detected for this path.') : 'robots.txt not fetched: ' + (robots.error||'unknown error') }</div>
     <div style="margin-top:16px; display:flex; gap:8px; flex-wrap:wrap;">
-      <label>Max pages: <input id="ppc_max_pages" type="number" min="1" value="100" style="width:90px"/></label>
       <button id="ppc_start_btn" class="ppc-btn" disabled>Start Deep Crawl</button>
       <button id="ppc_cancel_btn" class="ppc-btn" style="background:#555;">Cancel</button>
     </div>
@@ -107,7 +106,7 @@ function injectDeepCrawlModal(robots) {
 
   panel.querySelector('#ppc_cancel_btn').addEventListener('click', () => overlay.remove());
   panel.querySelector('#ppc_start_btn').addEventListener('click', () => {
-    const maxPages = parseInt(panel.querySelector('#ppc_max_pages').value, 10) || 1;
+    const maxPages = 30; // fixed limit
     const consent = {
       c1: panel.querySelector('#ppc_c1').checked,
       c2: panel.querySelector('#ppc_c2').checked,

@@ -1,11 +1,10 @@
 // Popup logic (scaffold)
 
-const analyzeBtn = document.getElementById('analyzeBtn');
 const deepCrawlBtn = document.getElementById('deepCrawlBtn');
 const statusEl = document.getElementById('status');
 const resultsEl = document.getElementById('results');
-const maxPagesInput = document.getElementById('maxPages');
 const openOptionsLink = document.getElementById('openOptions');
+const keyIndicator = document.getElementById('keyIndicator');
 
 openOptionsLink.addEventListener('click', (e) => {
   e.preventDefault();
@@ -13,19 +12,6 @@ openOptionsLink.addEventListener('click', (e) => {
 });
 
 function setStatus(msg) { statusEl.textContent = msg; }
-
-analyzeBtn.addEventListener('click', () => {
-  setStatus('Extracting…');
-  chrome.runtime.sendMessage({ type: 'PPC_ANALYZE_SINGLE_PAGE' }, resp => {
-    if (!resp || !resp.ok) {
-      setStatus('Error: ' + (resp && resp.error));
-      return;
-    }
-    const { summary, reviewCount } = resp.result;
-    setStatus('Done. Reviews: ' + reviewCount);
-    renderSummary(summary);
-  });
-});
 
 deepCrawlBtn.addEventListener('click', () => {
   setStatus('Preparing deep crawl modal…');
@@ -36,6 +22,22 @@ deepCrawlBtn.addEventListener('click', () => {
     });
   });
 });
+
+function updateKeyIndicator() {
+  chrome.runtime.sendMessage({ type: 'PPC_GET_KEY_HEALTH' }, resp => {
+    if (!resp || !resp.ok || !resp.health) { keyIndicator.style.background = '#999'; return; }
+    const status = resp.health.status;
+    let color = '#999';
+    if (status === 'valid') color = '#059669';
+    else if (status === 'quota_exhausted') color = '#92400e';
+    else if (status === 'invalid') color = '#dc2626';
+    else if (status === 'network_error') color = '#6d28d9';
+    keyIndicator.style.background = color;
+    keyIndicator.title = status.toUpperCase() + (resp.health.message ? ': ' + resp.health.message : '');
+  });
+}
+
+updateKeyIndicator();
 
 function renderSummary(summary) {
   resultsEl.hidden = false;

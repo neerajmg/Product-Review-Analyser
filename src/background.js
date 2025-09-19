@@ -15,6 +15,7 @@ const CRAWL_JITTER_MS = 300; // ± jitter
 const CRAWL_MIN_DELAY_MS = 500; // enforced minimum
 const GEMINI_RATE_LIMIT_MS = 3000; // at most one request / 3s
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const FIXED_MAX_PAGES = 30; // user feedback: fixed crawl limit
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -71,7 +72,6 @@ function loadOptions() {
     chrome.storage.sync.get(STORAGE_KEYS.OPTIONS, data => {
       resolve(Object.assign({
         fallbackMode: true,
-        maxPagesDefault: 100,
         apiKey: '', // never exposed to content script
       }, data[STORAGE_KEYS.OPTIONS] || {}));
     });
@@ -126,16 +126,104 @@ function redactPII(text) {
 }
 
 // =============================
-// Mock Gemini Integration
+// Gemini Integration (Mock + Real w/ Schema Validation)
 // =============================
-/**
- * MOCKED Gemini summarizer per spec. Returns plausible JSON.
- * This function MUST NOT perform network during scaffold.
- * @param {Array<object>} reviews - [{id, text, rating?}]
- */
-async function rewriteWithGemini(reviews) {
+
+// Strict schema descriptor used for validation
+const SUMMARY_SCHEMA = {
+  type: 'object',
+  required: ['pros','cons','note_pros','note_cons'],
+  properties: {
+    pros: { type: 'array', maxItems: 8, items: { type: 'object', required:['label','support_count','example_ids'], properties:{ label:{type:'string', maxLength:120}, support_count:{type:'number'}, example_ids:{type:'array', items:{type:'string'}} } } },
+    cons: { type: 'array', maxItems: 8, items: { type: 'object', required:['label','support_count','example_ids'], properties:{ label:{type:'string', maxLength:120}, support_count:{type:'number'}, example_ids:{type:'array', items:{type:'string'}} } } },
+    note_pros: { type:'string' },
+    note_cons: { type:'string' }
+  }
+};
+
+function validateAgainstSchema(obj, schema=SUMMARY_SCHEMA) {
+  if (schema.type === 'object') {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+    if (schema.required) {
+      for (const k of schema.required) if (!(k in obj)) return false;
+    }
+    if (schema.properties) {
+      for (const [k, def] of Object.entries(schema.properties)) {
+        if (obj[k] === undefined) continue;
+        if (!validateAgainstSchema(obj[k], def)) return false;
+      }
+    }
+    return true;
+  }
+  if (schema.type === 'array') {
+    if (!Array.isArray(obj)) return false;
+    if (schema.maxItems !== undefined && obj.length > schema.maxItems) return false;
+    if (schema.items) return obj.every(it => validateAgainstSchema(it, schema.items));
+    return true;
+  }
+  if (schema.type === 'string') return typeof obj === 'string' && (schema.maxLength? obj.length <= schema.maxLength : true);
+  if (schema.type === 'number') return typeof obj === 'number' && !Number.isNaN(obj);
+  return false;
+}
+
+function coerceAndClean(summary) {
+  const safeArr = (arr) => Array.isArray(arr) ? arr.filter(x => x && typeof x.label === 'string').slice(0,8).map(x => ({
+    label: String(x.label).slice(0,120),
+    support_count: Math.max(0, Number(x.support_count)||0),
+    example_ids: Array.isArray(x.example_ids) ? x.example_ids.filter(id => typeof id === 'string').slice(0,5) : []
+  })) : [];
+  return {
+    pros: safeArr(summary.pros),
+    cons: safeArr(summary.cons),
+    note_pros: summary.note_pros && typeof summary.note_pros === 'string' ? summary.note_pros.slice(0,200) : (summary.pros && summary.pros.length? '' : 'No pros found'),
+    note_cons: summary.note_cons && typeof summary.note_cons === 'string' ? summary.note_cons.slice(0,200) : (summary.cons && summary.cons.length? '' : 'No cons found')
+  };
+}
+
+function extractFirstJsonBlock(text) {
+  // find first '{' then attempt brace match
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  for (let i=start; i<text.length; i++) {
+    const ch = text[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        const slice = text.slice(start, i+1);
+        return slice;
+      }
+    }
+  }
+  return null;
+}
+
+// Sampling to control prompt size
+function sampleReviewsForPrompt(reviews, maxChars=12000) {
+  if (!Array.isArray(reviews) || !reviews.length) return [];
+  let acc = [];
+  let total = 0;
+  // Simple stratified by rating if available
+  const buckets = new Map();
+  for (const r of reviews) {
+    const key = r.rating != null ? String(r.rating) : 'na';
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(r);
+  }
+  for (const b of buckets.values()) b.sort((a,b)=> (b.text||'').length - (a.text||'').length);
+  const ordered = Array.from(buckets.values()).flat();
+  for (const r of ordered) {
+    const chunk = (r.text||'').slice(0,800);
+    if (total + chunk.length > maxChars) break;
+    acc.push({ id: r.id, text: chunk, rating: r.rating });
+    total += chunk.length;
+  }
+  return acc;
+}
+
+async function mockRewriteWithGemini(reviews) {
   console.log('PPC: GEMINI-REQ (mock) - reviewCount=', reviews.length);
-  // Simple frequency heuristic for mock: pick frequent words > 5 chars
   const freq = new Map();
   for (const r of reviews) {
     const words = (r.text || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 5);
@@ -151,26 +239,51 @@ async function rewriteWithGemini(reviews) {
   return result;
 }
 
-/*
- Real Gemini Flash 2.0 call TEMPLATE (commented per spec; user must supply API key in Options):
-
-async function rewriteWithGeminiReal(reviews, site) {
-  const options = await loadOptions();
-  const apiKey = options.apiKey; // stored in chrome.storage.sync
+async function realRewriteWithGemini(fullReviews, site) {
+  const opts = await loadOptions();
+  const apiKey = opts.apiKey;
   if (!apiKey) throw new Error('No API key');
-  // Build strict prompt (see spec section 5)
-  const masterPrompt = `You are a fact-based summarizer. Use ONLY the following review texts (no external knowledge). Identify distinct pros and cons that are actually present in the reviews.\n\nInput:\nSite: ${site}\nReviews: ${JSON.stringify(reviews)}\n\nRules:\n1) Do NOT invent facts or claims. Only use exact content from the review texts.\n2) For each pro or con, provide a short label (<= 8 words) and a support_count (how many reviews clearly support it).\n3) If support_count is 0 for positives, set "pros": [] and include "note_pros": "No pros found".\n4) If no negative feedback is found, set "cons": [] and include "note_cons": "No cons found".\n5) Output must be valid JSON ONLY, with this schema:\n\n{\n  "pros": [{"label":"...", "support_count": N, "example_ids":["r34","r72"]}, ...],\n  "cons": [{"label":"...", "support_count": M, "example_ids":["r21"]}, ...],\n  "note_pros": "No pros found" | "",\n  "note_cons": "No cons found" | ""\n}\n\nProvide up to 8 pros and up to 8 cons, ordered by support_count descending.`;
-  const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' + apiKey, {
+  const now = Date.now();
+  if (now - lastGeminiRequestTs < GEMINI_RATE_LIMIT_MS) {
+    const wait = GEMINI_RATE_LIMIT_MS - (now - lastGeminiRequestTs);
+    console.log('PPC: GEMINI-RATELIMIT sleeping', wait);
+    await new Promise(r => setTimeout(r, wait));
+  }
+  lastGeminiRequestTs = Date.now();
+  const sampled = sampleReviewsForPrompt(fullReviews);
+  const promptObj = { site, reviews: sampled };
+  const systemPrompt = `You are a STRICT JSON producer. Output ONLY valid JSON matching the schema. No commentary.`;
+  const userPrompt = `Summarize product reviews into pros/cons (max 8 each). Use ONLY provided text. Do not invent. JSON schema keys: pros(cons) arrays of {label,support_count,example_ids}; note_pros/note_cons strings. If none, use empty array and appropriate note. Input JSON: ${JSON.stringify(promptObj)}`;
+  const body = { contents: [ { role: 'user', parts: [{ text: systemPrompt + '\n\n' + userPrompt }] } ] };
+  const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' + encodeURIComponent(apiKey), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: masterPrompt }] }] })
+    body: JSON.stringify(body)
   });
   if (!resp.ok) throw new Error('Gemini API failure ' + resp.status);
   const data = await resp.json();
-  // TODO: parse and validate JSON-only output per strict schema.
-  return parsed; // object with pros, cons, note_pros, note_cons
+  // Attempt to extract text field(s)
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const text = parts.map(p => p.text || '').join('\n');
+  const jsonBlock = extractFirstJsonBlock(text);
+  if (!jsonBlock) throw new Error('No JSON block in model response');
+  let parsed; try { parsed = JSON.parse(jsonBlock); } catch(e){ throw new Error('Invalid JSON parse'); }
+  if (!validateAgainstSchema(parsed)) throw new Error('Schema validation failed');
+  return coerceAndClean(parsed);
 }
-*/
+
+async function rewriteWithGemini(reviews, site='') {
+  const opts = await loadOptions();
+  if (opts.fallbackMode || !opts.apiKey) {
+    return mockRewriteWithGemini(reviews);
+  }
+  try {
+    return await realRewriteWithGemini(reviews, site);
+  } catch (e) {
+    console.warn('PPC: GEMINI real failed, falling back', e.message);
+    return mockRewriteWithGemini(reviews);
+  }
+}
 
 // =============================
 // Local Fallback Summarizer
@@ -236,7 +349,8 @@ async function analyzeCurrentTab(tabId) {
       const wait = Date.now() - lastGeminiRequestTs;
       if (wait < GEMINI_RATE_LIMIT_MS) await new Promise(res => setTimeout(res, GEMINI_RATE_LIMIT_MS - wait));
       lastGeminiRequestTs = Date.now();
-      summary = await rewriteWithGemini(sanitized); // mock for now
+  // Real Gemini integration (or mock fallback) selected inside rewriteWithGemini based on options
+  summary = await rewriteWithGemini(sanitized);
     }
     await setCachedSummary(cacheKey, summary);
   }
@@ -291,7 +405,7 @@ async function initCrawlState(startUrl, maxPages, consent) {
     sessionId: 'sess_' + Math.random().toString(36).slice(2, 10),
     startUrl,
     currentUrl: startUrl,
-    maxPages,
+  maxPages,
     pagesCrawled: 0,
     aggregatedReviews: [],
     finished: false,
@@ -362,7 +476,8 @@ async function summarizeAggregated(state, forceRefresh = false) {
       const wait = Date.now() - lastGeminiRequestTs;
       if (wait < GEMINI_RATE_LIMIT_MS) await new Promise(r => setTimeout(r, GEMINI_RATE_LIMIT_MS - wait));
       lastGeminiRequestTs = Date.now();
-      summary = await rewriteWithGemini(sanitized); // still mock
+  // Real Gemini integration (or mock fallback) selected within rewriteWithGemini
+  summary = await rewriteWithGemini(sanitized);
     }
     await setCachedSummary(cacheKey, summary);
   } else {
@@ -519,6 +634,25 @@ async function updateKeyHealthAndNotify(trigger) {
   } else if (h.status === 'valid') {
     try { chrome.action.setBadgeText({ text: '' }); } catch(_){ }
   }
+  // Update toolbar icon color (green=valid, red=invalid, amber=quota, purple=network, gray=missing/other)
+  try {
+    const canvas = new OffscreenCanvas(32,32);
+    const ctx = canvas.getContext('2d');
+    let color = '#9ca3af';
+    if (h.status === 'valid') color = '#059669';
+    else if (h.status === 'invalid') color = '#dc2626';
+    else if (h.status === 'quota_exhausted') color = '#d97706';
+    else if (h.status === 'network_error') color = '#6d28d9';
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(16,16,14,0,Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    const imageData = ctx.getImageData(0,0,32,32);
+    chrome.action.setIcon({ imageData: { '32': imageData } });
+  } catch(_) { /* OffscreenCanvas not supported in some contexts */ }
   return h;
 }
 
@@ -560,8 +694,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             }
             sendResponse({ ok: true, cancelled: true });
         } else {
-          const { maxPages, consent } = msg;
+          const { consent } = msg;
           const tab = await chrome.tabs.get(sender.tab.id);
+          const maxPages = FIXED_MAX_PAGES;
           await initCrawlState(tab.url, maxPages, consent);
           // Immediately show progress overlay
           chrome.tabs.sendMessage(sender.tab.id, { type: 'PPC_CRAWL_PROGRESS', pagesCrawled:0, maxPages, status:'Starting…' });

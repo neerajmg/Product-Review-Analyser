@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Product Pros/Cons</title>
   <link rel="stylesheet" href="../../styles.css" />
   <style>
@@ -12,17 +13,17 @@
   </style>
 </head>
 <body>
-  <h1 style="font-size:16px;margin:0 0 8px;">Pros/Cons Extractor</h1>
-  <div>
-    <label>Max pages: <input id="maxPages" type="number" min="1" value="1" style="width:70px" /></label>
+  <h1 class="ppc-popup-title">Pros/Cons Extractor</h1>
+  <div class="ppc-flex-row ppc-gap mt-8">
+    <button id="deepCrawlBtn" class="ppc-btn flex-1">Analyze Reviews (Deep Crawl Up To 30 Pages)</button>
   </div>
-  <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
-    <button id="analyzeBtn">Analyze Reviews (This Page)</button>
-    <button id="deepCrawlBtn">Deep Crawl…</button>
+  <div id="apiKeyHelp" class="ppc-api-help">
+    <span id="keyIndicator" class="ppc-key-indicator"></span>
+    Provide your Gemini API key in Settings for cloud summarization; otherwise local fallback will be used.
   </div>
-  <div id="status" style="margin-top:8px;font-size:12px;color:#555;"></div>
+  <div id="status" class="ppc-status"></div>
   <div id="results" hidden></div>
-  <div style="margin-top:8px; font-size:11px;">
+  <div class="ppc-footer-link">
     <a href="#" id="openOptions">Settings</a>
   </div>
   <script src="popup.js"></script>

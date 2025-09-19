@@ -45,10 +45,6 @@
       <label><input id="fallbackMode" type="checkbox" class="toggle" /> Fallback mode (local summarizer only)</label>
     </div>
     <div class="row">
-      <label for="maxPagesDefault">Default Max Pages to Crawl</label>
-      <input id="maxPagesDefault" type="number" min="1" max="10000" value="100" />
-    </div>
-    <div class="row">
       <span id="saveStatus"></span>
     </div>
   </fieldset>
@@ -61,7 +57,7 @@
         const o = resp.options;
         document.getElementById('apiKey').value = o.apiKey || '';
         document.getElementById('fallbackMode').checked = !!o.fallbackMode;
-        document.getElementById('maxPagesDefault').value = o.maxPagesDefault || 100;
+  // max pages removed (fixed to 30)
         refreshKeyHealth();
       });
     }
@@ -69,7 +65,7 @@
       const payload = {
         apiKey: document.getElementById('apiKey').value.trim(),
         fallbackMode: document.getElementById('fallbackMode').checked,
-        maxPagesDefault: parseInt(document.getElementById('maxPagesDefault').value, 10) || 100
+  // no longer storing maxPagesDefault
       };
       chrome.runtime.sendMessage({ type: 'PPC_SAVE_OPTIONS', payload }, resp => {
         document.getElementById('saveStatus').textContent = resp && resp.ok ? 'Saved.' : 'Error saving';
