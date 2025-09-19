@@ -1,0 +1,85 @@
+# --- Core OS / Editor Junk ---
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+*.swp
+*.swo
+*.tmp
+*.orig
+*.bak
+~$*
+
+# --- Node / JS Ecosystem (future-proof if tooling added) ---
+node_modules/
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+
+# --- Build / Dist Artifacts ---
+dist/
+build/
+out/
+coverage/
+reports/
+
+# --- Chrome Extension Bundles / Packaging ---
+*.crx
+*.zip
+*.pem
+
+# --- Logs & Diagnostics ---
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Environment / Secrets (never commit API keys) ---
+.env
+.env.*
+env.local
+secrets.*
+*.secret
+*.key
+*.keystore
+
+# --- IDE / Editor Config ---
+.vscode/
+.idea/
+*.iml
+.history/
+.fleet/
+
+# --- Testing / Temp ---
+.nyc_output/
+tmp/
+temp/
+
+# --- Coverage Tools ---
+lcov.info
+
+# --- OS Metadata Folders ---
+__MACOSX/
+
+# --- Cache ---
+.cache/
+.parcel-cache/
+*.tsbuildinfo
+
+# --- Python (if auxiliary scripts appear) ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+
+# --- Misc ---
+*.sqlite
+*.sqlite3
+*.tgz
+*.lock
+
+# Explicitly keep specification & source
+!build_instructions.md
