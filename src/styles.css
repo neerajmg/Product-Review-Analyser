@@ -1,0 +1,13 @@
+/* Shared styles & overlay placeholders */
+.ppc-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 999999; display:flex; align-items:flex-start; justify-content:center; padding-top:40px; font-family: system-ui, Arial, sans-serif; }
+.ppc-panel { background:#fff; width: min(820px, 95%); max-height:80vh; overflow:auto; border-radius:8px; box-shadow:0 4px 18px rgba(0,0,0,0.35); padding:20px; }
+.ppc-panel h2 { margin-top:0; }
+.ppc-btn { background:#2563eb; color:#fff; border:none; padding:8px 14px; border-radius:4px; cursor:pointer; }
+.ppc-btn[disabled] { opacity:0.5; cursor:not-allowed; }
+.ppc-pro { color:#065f46; }
+.ppc-con { color:#7f1d1d; }
+.ppc-flex { display:flex; gap:16px; flex-wrap:wrap; }
+.ppc-opt-intro { max-width:640px; font-size:14px; line-height:1.4; }
+.ppc-inline-btn-margin { margin-right:6px; }
+.ppc-inline-btn-left { margin-left:8px; }
+.ppc-small-text { font-size:12px; }

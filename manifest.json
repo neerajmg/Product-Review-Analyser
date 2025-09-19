@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "Product Pros/Cons Extractor — Safe Deep Crawl Edition",
+  "description": "Extract unbiased pros & cons from product reviews with optional safe deep crawl (foreground, consent-gated, PII‑redacted).",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "Product Pros/Cons",
+    "default_popup": "src/ui/popup.html"
+  },
+  "options_page": "src/ui/options.html",
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "activeTab",
+    "alarms"
+  ],
+  "host_permissions": [
+    "*://*/*"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*/*"],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/styles.css"],
+      "matches": ["*://*/*"]
+    }
+  ]
+}

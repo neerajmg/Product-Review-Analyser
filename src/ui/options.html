@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Product Pros/Cons — Settings</title>
+  <link rel="stylesheet" href="../../styles.css" />
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 16px; max-width: 720px; }
+    label { display:block; margin:12px 0 4px; font-weight:600; }
+    input[type=text], input[type=number] { width: 420px; padding:6px; }
+    .row { margin-bottom: 12px; }
+    .toggle { width:auto; }
+    #saveStatus { font-size:12px; color:#555; }
+    fieldset { border:1px solid #ccc; padding:12px; }
+    legend { font-weight:600; }
+  </style>
+</head>
+<body>
+  <h1>Product Pros/Cons — Settings</h1>
+  <p class="ppc-opt-intro">
+    <strong>Gemini API Key Setup:</strong><br>
+  1) Visit <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio – API Keys</a> and create a key (ensure billing/quota enabled).<br>
+    2) Paste the key below and click <em>Save</em>, then <em>Validate Key</em>.<br>
+    3) Status indicator will show <code>VALID</code>, <code>INVALID</code>, <code>QUOTA EXHAUSTED</code>, or network errors.<br>
+    4) If quota is exhausted or key expires, the extension shows a red badge (!) and an in-page toast when active.<br>
+    <br>
+    <strong>Fallback mode:</strong> If enabled, only the local deterministic summarizer runs (no API calls).<br>
+    <strong>Max pages:</strong> Default deep crawl limit (asks for confirmation when >100).<br>
+    <strong>Security:</strong> Key is stored only via Chrome storage on this browser. It is never sent anywhere except directly to the Gemini API endpoint when summarizing.
+  </p>
+
+  <fieldset>
+    <legend>Configuration</legend>
+    <div class="row">
+      <label for="apiKey">Gemini API Key</label>
+      <input id="apiKey" type="text" placeholder="Paste key (optional)" />
+      <button id="saveBtn" class="ppc-inline-btn-margin">Save</button>
+      <button id="testKeyBtn">Validate Key</button>
+    </div>
+    <div class="row ppc-small-text">
+      Key Status: <span id="keyStatus">(not checked)</span>
+      <button id="recheckBtn" class="ppc-inline-btn-left">Re-check</button>
+    </div>
+    <div class="row">
+      <label><input id="fallbackMode" type="checkbox" class="toggle" /> Fallback mode (local summarizer only)</label>
+    </div>
+    <div class="row">
+      <label for="maxPagesDefault">Default Max Pages to Crawl</label>
+      <input id="maxPagesDefault" type="number" min="1" max="10000" value="100" />
+    </div>
+    <div class="row">
+      <span id="saveStatus"></span>
+    </div>
+  </fieldset>
+
+  <script>
+    // Inline style classes added to avoid linter warnings
+    function load() {
+      chrome.runtime.sendMessage({ type: 'PPC_GET_OPTIONS' }, resp => {
+        if (!resp || !resp.ok) return;
+        const o = resp.options;
+        document.getElementById('apiKey').value = o.apiKey || '';
+        document.getElementById('fallbackMode').checked = !!o.fallbackMode;
+        document.getElementById('maxPagesDefault').value = o.maxPagesDefault || 100;
+        refreshKeyHealth();
+      });
+    }
+    function save() {
+      const payload = {
+        apiKey: document.getElementById('apiKey').value.trim(),
+        fallbackMode: document.getElementById('fallbackMode').checked,
+        maxPagesDefault: parseInt(document.getElementById('maxPagesDefault').value, 10) || 100
+      };
+      chrome.runtime.sendMessage({ type: 'PPC_SAVE_OPTIONS', payload }, resp => {
+        document.getElementById('saveStatus').textContent = resp && resp.ok ? 'Saved.' : 'Error saving';
+        setTimeout(() => { document.getElementById('saveStatus').textContent=''; }, 2000);
+      });
+    }
+    document.getElementById('saveBtn').addEventListener('click', save);
+    document.getElementById('testKeyBtn').addEventListener('click', () => {
+      const key = document.getElementById('apiKey').value.trim();
+      chrome.runtime.sendMessage({ type: 'PPC_TEST_KEY', apiKey: key }, resp => {
+        if (resp) {
+          updateKeyStatus(resp.health || { status: resp.ok ? 'valid':'error', message: resp.message });
+          alert(resp.message || 'No response');
+        }
+      });
+    });
+    document.getElementById('recheckBtn').addEventListener('click', () => {
+      chrome.runtime.sendMessage({ type: 'PPC_FORCE_KEY_RECHECK' }, resp => {
+        if (resp && resp.ok) updateKeyStatus(resp.health);
+      });
+    });
+
+    function refreshKeyHealth() {
+      chrome.runtime.sendMessage({ type: 'PPC_GET_KEY_HEALTH' }, resp => {
+        if (resp && resp.ok && resp.health) updateKeyStatus(resp.health);
+      });
+    }
+    function updateKeyStatus(h) {
+      const el = document.getElementById('keyStatus');
+      if (!h) { el.textContent='(unknown)'; return; }
+      let color = '#555';
+      switch(h.status){
+        case 'valid': color = '#065f46'; break;
+        case 'quota_exhausted': color = '#92400e'; break;
+        case 'invalid': color = '#b91c1c'; break;
+        case 'network_error': color = '#6d28d9'; break;
+        case 'missing': color = '#555'; break;
+        default: color = '#374151';
+      }
+      el.textContent = h.status.toUpperCase() + (h.message ? ' – ' + h.message : '');
+      el.style.color = color;
+    }
+    load();
+  </script>
+</body>
+</html>
