@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Product Pros/Cons — Settings</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Settings</title>
   <link rel="stylesheet" href="../../styles.css" />
   <style>
     body { font-family: system-ui, Arial, sans-serif; margin: 16px; max-width: 720px; }
@@ -16,7 +17,7 @@
   </style>
 </head>
 <body>
-  <h1>Product Pros/Cons — Settings</h1>
+  <h1>Settings</h1>
   <p class="ppc-opt-intro">
     <strong>Gemini API Key Setup:</strong><br>
   1) Visit <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio – API Keys</a> and create a key (ensure billing/quota enabled).<br>
@@ -73,18 +74,41 @@
       });
     }
     document.getElementById('saveBtn').addEventListener('click', save);
+    function disableKeyButtons(disabled){
+      document.getElementById('testKeyBtn').disabled = disabled;
+      document.getElementById('recheckBtn').disabled = disabled;
+    }
     document.getElementById('testKeyBtn').addEventListener('click', () => {
       const key = document.getElementById('apiKey').value.trim();
+      if (!key) { alert('Enter a key first.'); return; }
+      disableKeyButtons(true);
+      updateKeyStatus({ status:'checking', message:'Validating…' });
       chrome.runtime.sendMessage({ type: 'PPC_TEST_KEY', apiKey: key }, resp => {
-        if (resp) {
-          updateKeyStatus(resp.health || { status: resp.ok ? 'valid':'error', message: resp.message });
-          alert(resp.message || 'No response');
+        disableKeyButtons(false);
+        if (chrome.runtime.lastError) {
+          updateKeyStatus({ status:'error', message: chrome.runtime.lastError.message });
+          alert('Extension error: ' + chrome.runtime.lastError.message);
+          return;
         }
+        if (!resp) { updateKeyStatus({ status:'error', message:'No response' }); alert('No response'); return; }
+        updateKeyStatus(resp.health || { status: resp.ok ? 'valid':'error', message: resp.message });
+        if (resp.ok) {
+          // Auto-save validated key so health re-checks work.
+          save();
+        }
+        alert(resp.message || (resp.ok ? 'Key valid' : 'Key invalid'));
       });
     });
     document.getElementById('recheckBtn').addEventListener('click', () => {
+      disableKeyButtons(true);
+      updateKeyStatus({ status:'checking', message:'Re-checking…' });
       chrome.runtime.sendMessage({ type: 'PPC_FORCE_KEY_RECHECK' }, resp => {
-        if (resp && resp.ok) updateKeyStatus(resp.health);
+        disableKeyButtons(false);
+        if (chrome.runtime.lastError) {
+            updateKeyStatus({ status:'error', message: chrome.runtime.lastError.message });
+            return;
+        }
+        if (resp && resp.ok) updateKeyStatus(resp.health); else updateKeyStatus({ status:'error', message: resp && resp.error || 'Failed' });
       });
     });
 
@@ -95,7 +119,8 @@
     }
     function updateKeyStatus(h) {
       const el = document.getElementById('keyStatus');
-      if (!h) { el.textContent='(unknown)'; return; }
+  if (!h) { el.textContent='(unknown)'; return; }
+  if (h.status === 'checking') { el.textContent = 'Checking…'; el.style.color = '#2563eb'; return; }
       let color = '#555';
       switch(h.status){
         case 'valid': color = '#065f46'; break;
