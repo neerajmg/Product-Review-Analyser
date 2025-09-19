@@ -52,24 +52,37 @@ function refreshKeyHealth() {
   });
 }
 
+function showToast(msg, type='info') {
+  let toast = document.querySelector('.ppc-toast');
+  if (toast) toast.remove();
+  toast = document.createElement('div');
+  toast.className = 'ppc-toast';
+  const colors = { info:'#2563eb', success:'#065f46', error:'#b91c1c' };
+  const color = colors[type] || colors.info;
+  toast.style.cssText = 'position:fixed;bottom:14px;right:14px;z-index:999999;background:#111;color:#fff;padding:10px 14px;border-radius:6px;font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,.35);max-width:280px;line-height:1.3;';
+  toast.innerHTML = `<span style="color:${color};font-weight:600;">${type.toUpperCase()}</span><br>${msg}`;
+  document.body.appendChild(toast);
+  setTimeout(()=>{ toast.remove(); }, 4200);
+}
+
 function attachEvents(){
   qs('saveBtn').addEventListener('click', save);
   qs('testKeyBtn').addEventListener('click', () => {
     const key = qs('apiKey').value.trim();
-    if (!key) { alert('Enter a key first.'); return; }
+    if (!key) { showToast('Enter a key first.', 'error'); return; }
     disableKeyButtons(true);
     updateKeyStatus({ status:'checking', message:'Validating…' });
     chrome.runtime.sendMessage({ type: 'PPC_TEST_KEY', apiKey: key }, resp => {
       disableKeyButtons(false);
       if (chrome.runtime.lastError) {
         updateKeyStatus({ status:'error', message: chrome.runtime.lastError.message });
-        alert('Extension error: ' + chrome.runtime.lastError.message);
+        showToast('Extension error: ' + chrome.runtime.lastError.message, 'error');
         return;
       }
-      if (!resp) { updateKeyStatus({ status:'error', message:'No response' }); alert('No response'); return; }
+      if (!resp) { updateKeyStatus({ status:'error', message:'No response' }); showToast('No response from background script.', 'error'); return; }
       updateKeyStatus(resp.health || { status: resp.ok ? 'valid':'error', message: resp.message });
       if (resp.ok) save();
-      alert(resp.message || (resp.ok ? 'Key valid' : 'Key invalid'));
+      showToast(resp.message || (resp.ok ? 'Key valid' : 'Key invalid'), resp.ok ? 'success':'error');
     });
   });
   qs('recheckBtn').addEventListener('click', () => {
@@ -79,9 +92,16 @@ function attachEvents(){
       disableKeyButtons(false);
       if (chrome.runtime.lastError) {
         updateKeyStatus({ status:'error', message: chrome.runtime.lastError.message });
+        showToast('Extension error: ' + chrome.runtime.lastError.message, 'error');
         return;
       }
-      if (resp && resp.ok) updateKeyStatus(resp.health); else updateKeyStatus({ status:'error', message: resp && resp.error || 'Failed' });
+      if (resp && resp.ok) {
+        updateKeyStatus(resp.health);
+        showToast('Health re-check: ' + (resp.health?.status || 'unknown'), resp.health?.status==='valid' ? 'success':'info');
+      } else {
+        updateKeyStatus({ status:'error', message: resp && resp.error || 'Failed' });
+        showToast('Re-check failed.', 'error');
+      }
     });
   });
 }
