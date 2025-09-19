@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "Product Pros/Cons Extractor — Safe Deep Crawl Edition",
-  "description": "Extract unbiased pros & cons from product reviews with optional safe deep crawl (foreground, consent-gated, PII‑redacted).",
+  "name": "Review Analyzer",
+  "description": "Analyze product reviews with safe deep crawl and structured pros/cons summarization.",
   "version": "0.1.0",
   "action": {
-    "default_title": "Product Pros/Cons",
+  "default_title": "Review Analyzer",
     "default_popup": "src/ui/popup.html"
   },
   "options_page": "src/ui/options.html",
@@ -25,7 +25,7 @@
   "content_scripts": [
     {
       "matches": ["*://*/*"],
-      "js": ["src/content.js"],
+      "js": ["src/selectors.js", "src/content.js"],
       "run_at": "document_idle"
     }
   ],

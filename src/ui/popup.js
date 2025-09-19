@@ -5,6 +5,7 @@ const statusEl = document.getElementById('status');
 const resultsEl = document.getElementById('results');
 const openOptionsLink = document.getElementById('openOptions');
 const keyIndicator = document.getElementById('keyIndicator');
+const healthDot = document.getElementById('healthDot');
 
 openOptionsLink.addEventListener('click', (e) => {
   e.preventDefault();
@@ -17,23 +18,72 @@ deepCrawlBtn.addEventListener('click', () => {
   setStatus('Preparing deep crawl modal…');
   chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
     if (!tabs.length) return setStatus('No active tab');
-    chrome.tabs.sendMessage(tabs[0].id, { type: 'PPC_PING' }, () => {
-      chrome.runtime.sendMessage({ type: 'PPC_INIT_DEEP_CRAWL' });
+    const tabId = tabs[0].id;
+    // First, ping content script to verify it is injected
+    chrome.tabs.sendMessage(tabId, { type: 'PPC_PING' }, pingResp => {
+      if (chrome.runtime.lastError) {
+        const msg = chrome.runtime.lastError.message || '';
+        if (/Receiving end does not exist/i.test(msg)) {
+          // Attempt programmatic injection fallback, then retry once
+          chrome.scripting?.executeScript({ target: { tabId }, files: ['src/content.js'] }, () => {
+            if (chrome.runtime.lastError) {
+              setStatus('Content script missing and injection failed: ' + chrome.runtime.lastError.message);
+              return;
+            }
+            // re-ping
+            chrome.tabs.sendMessage(tabId, { type: 'PPC_PING' }, () => {
+              if (chrome.runtime.lastError) {
+                setStatus('Content script still not reachable. Reload the page and try again.');
+                return;
+              }
+              // proceed now
+              chrome.runtime.sendMessage({ type: 'PPC_INIT_DEEP_CRAWL', tabId }, resp => {
+                if (chrome.runtime.lastError) { setStatus('Error: ' + chrome.runtime.lastError.message); return; }
+                if (!resp || !resp.ok) { setStatus('Failed: ' + (resp && resp.error || 'unknown')); return; }
+                setStatus('Consent modal opened (check the page)');
+              });
+            });
+          });
+        } else {
+          setStatus('Cannot reach content script: ' + msg);
+        }
+        return;
+      }
+      // If ping ok, ask background to start deep crawl consent
+      chrome.runtime.sendMessage({ type: 'PPC_INIT_DEEP_CRAWL', tabId }, resp => {
+        if (chrome.runtime.lastError) {
+          setStatus('Error: ' + chrome.runtime.lastError.message);
+          return;
+        }
+        if (!resp || !resp.ok) {
+          setStatus('Failed: ' + (resp && resp.error || 'unknown'));
+          return;
+        }
+        if (resp.skippedModal) {
+          setStatus('Crawl started (consent remembered)');
+        } else {
+          setStatus('Consent modal opened (check the page)');
+        }
+      });
     });
   });
 });
 
 function updateKeyIndicator() {
   chrome.runtime.sendMessage({ type: 'PPC_GET_KEY_HEALTH' }, resp => {
-    if (!resp || !resp.ok || !resp.health) { keyIndicator.style.background = '#999'; return; }
-    const status = resp.health.status;
+    let status = resp && resp.ok && resp.health && resp.health.status;
     let color = '#999';
     if (status === 'valid') color = '#059669';
-    else if (status === 'quota_exhausted') color = '#92400e';
-    else if (status === 'invalid') color = '#dc2626';
+    else if (status === 'invalid' || status === 'missing') color = '#dc2626';
+    else if (status === 'quota_exhausted') color = '#d97706';
     else if (status === 'network_error') color = '#6d28d9';
-    keyIndicator.style.background = color;
-    keyIndicator.title = status.toUpperCase() + (resp.health.message ? ': ' + resp.health.message : '');
+    keyIndicator.style.background = color; // existing inline indicator text area
+    if (healthDot) healthDot.style.background = (status === 'valid') ? '#059669' : '#dc2626';
+    if (resp && resp.health) {
+      const msg = status.toUpperCase() + (resp.health.message ? ': ' + resp.health.message : '');
+      keyIndicator.title = msg;
+      if (healthDot) healthDot.title = msg;
+    }
   });
 }
 

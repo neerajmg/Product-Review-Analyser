@@ -1,10 +1,10 @@
-# Product Pros/Cons Extractor — Safe Deep Crawl Edition
+# Review Analyzer
 
-This repository contains the initial scaffold for a Chrome extension that:
+This repository contains a Chrome extension that:
 
 - Extracts product reviews from the current page
-- Produces an unbiased pros/cons summary (mock Gemini + deterministic fallback)
-- Prepares for a safe, consent-gated deep crawl (foreground, resumable) per `build_instructions.md`
+- Produces an unbiased pros/cons summary (Gemini + deterministic fallback)
+- Performs a safe, consent-gated deep crawl (foreground, resumable)
 
 
 ## Current Status (Scaffold)
@@ -53,7 +53,7 @@ The extension periodically re-checks the key (every ~6 hours) and before making 
 
 1. Load extension unpacked (`chrome://extensions`).
 2. Open a product page with reviews.
-3. Use the popup button “Analyze Reviews (Deep Crawl Up To 30 Pages)”.
+3. Use the popup button “Analyze Reviews”.
 4. Complete the consent modal; crawl will aggregate up to 30 pages or stop earlier when pages end.
 5. View pros/cons overlay. If no API key is set, local fallback summarizer is used.
 

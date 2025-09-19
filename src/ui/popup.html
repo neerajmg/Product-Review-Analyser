@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Product Pros/Cons</title>
+  <title>Review Analyzer</title>
   <link rel="stylesheet" href="../../styles.css" />
   <style>
     body { font-family: system-ui, Arial, sans-serif; margin: 12px; width: 320px; }
@@ -13,7 +13,10 @@
   </style>
 </head>
 <body>
-  <h1 class="ppc-popup-title">Pros/Cons Extractor</h1>
+  <style>
+    .health-dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#999;vertical-align:middle;margin-left:6px;}
+  </style>
+  <h1 class="ppc-popup-title">Review Analyzer <span id="healthDot" class="health-dot"></span></h1>
   <div class="ppc-flex-row ppc-gap mt-8">
   <button id="deepCrawlBtn" class="ppc-btn flex-1">Analyze Reviews</button>
   </div>

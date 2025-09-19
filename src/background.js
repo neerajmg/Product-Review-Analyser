@@ -3,7 +3,7 @@
  * Restored after refactor: constants & utility functions + Gemini integration.
  */
 
-import { validateAgainstSchema, coerceAndClean, extractFirstJsonBlock, sampleReviewsForPrompt, mockRewriteWithGemini, localFallback } from './lib/summary_utils.js';
+import { validateAgainstSchema, coerceAndClean, extractFirstJsonBlock, sampleReviewsForPrompt, mockRewriteWithGemini, localFallback, heuristicAspectSummary } from './lib/summary_utils.js';
 
 // =============================
 // Section: Constants & Settings
@@ -14,14 +14,17 @@ const CRAWL_JITTER_MS = 300; // ± jitter
 const CRAWL_MIN_DELAY_MS = 500; // enforced minimum
 const GEMINI_RATE_LIMIT_MS = 3000; // at most one request / 3s
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-const FIXED_MAX_PAGES = 30; // fixed crawl limit per UX decision
+// Dynamic caps (user configurable via options). The fixed constant is replaced by defaults.
+const DEFAULT_MAX_PAGES_CAP = 60; // user can adjust 5–100
+const DEFAULT_MAX_REVIEW_COUNT = 1200; // user can adjust 200–2500
 
 // Storage keys
 const STORAGE_KEYS = {
   OPTIONS: 'ppc_options',
   CRAWL_STATE: 'ppc_crawl_state',
   CACHE: 'ppc_cache',
-  KEY_HEALTH: 'ppc_key_health'
+  KEY_HEALTH: 'ppc_key_health',
+  GLOBAL_CONSENT: 'ppc_global_consent'
 };
 
 // In-memory trackers
@@ -52,9 +55,27 @@ async function computeCacheKey(url, reviews) {
 function loadOptions() {
   return new Promise(resolve => {
     chrome.storage.sync.get(STORAGE_KEYS.OPTIONS, data => {
-      resolve(Object.assign({ fallbackMode: true, apiKey: '' }, data[STORAGE_KEYS.OPTIONS] || {}));
+      resolve(Object.assign({
+        fallbackMode: true,
+        apiKey: '',
+        maxPagesCap: DEFAULT_MAX_PAGES_CAP,
+        maxReviewCount: DEFAULT_MAX_REVIEW_COUNT
+      }, data[STORAGE_KEYS.OPTIONS] || {}));
     });
   });
+}
+
+function computeMaxPages(opts){
+  let v = parseInt(opts?.maxPagesCap,10);
+  if (isNaN(v)) v = DEFAULT_MAX_PAGES_CAP;
+  v = Math.max(5, Math.min(100, v));
+  return v;
+}
+function computeMaxReviewCount(opts){
+  let v = parseInt(opts?.maxReviewCount,10);
+  if (isNaN(v)) v = DEFAULT_MAX_REVIEW_COUNT;
+  v = Math.max(200, Math.min(2500, v));
+  return v;
 }
 function saveOptions(opts) { return new Promise(r => chrome.storage.sync.set({ [STORAGE_KEYS.OPTIONS]: opts }, r)); }
 
@@ -63,6 +84,11 @@ function setCache(obj) { return new Promise(r => chrome.storage.local.set({ [STO
 
 function getKeyHealth() { return new Promise(r => chrome.storage.local.get(STORAGE_KEYS.KEY_HEALTH, d => r(d[STORAGE_KEYS.KEY_HEALTH] || null))); }
 function setKeyHealth(h) { keyHealthCache = h; return new Promise(r => chrome.storage.local.set({ [STORAGE_KEYS.KEY_HEALTH]: h }, r)); }
+
+function getGlobalConsent() {
+  return new Promise(r => chrome.storage.local.get(STORAGE_KEYS.GLOBAL_CONSENT, d => r(d[STORAGE_KEYS.GLOBAL_CONSENT] || null)));
+}
+function setGlobalConsent(obj) { return new Promise(r => chrome.storage.local.set({ [STORAGE_KEYS.GLOBAL_CONSENT]: obj }, r)); }
 
 function redactPII(text) {
   if (!text) return text;
@@ -85,9 +111,15 @@ async function realRewriteWithGemini(fullReviews, site) {
   lastGeminiRequestTs = Date.now();
   const sampled = sampleReviewsForPrompt(fullReviews);
   const promptObj = { site, reviews: sampled };
-  const systemPrompt = `You are a STRICT JSON producer. Output ONLY valid JSON matching the schema. No commentary.`;
-  const userPrompt = `Summarize product reviews into pros/cons (max 8 each). Use ONLY provided text. Do not invent. JSON schema keys: pros(cons) arrays of {label,support_count,example_ids}; note_pros/note_cons strings. If none, use empty array and appropriate note. Input JSON: ${JSON.stringify(promptObj)}`;
-  const body = { contents: [ { role: 'user', parts: [{ text: systemPrompt + '\n\n' + userPrompt }] } ] };
+  const schemaDescription = `{
+  "pros": [ { "label": string, "support_count": number, "example_ids": [string] } ],
+  "cons": [ { "label": string, "support_count": number, "example_ids": [string] } ],
+  "note_pros": string,
+  "note_cons": string
+}`;
+  const systemPrompt = `You are an assistant that extracts product ASPECTS from user reviews and produces ONLY JSON (no markdown). Each aspect label must be a concise noun phrase (e.g. "battery life", "build quality", "noise level", "customer support"). Do NOT use placeholders like 'product', 'name', 'brand', 'redacted'. Merge duplicates. Limit to top 8 pros and 8 cons.`;
+  const userPrompt = `SOURCE SITE: ${site || 'unknown'}\nTASK: From the provided review objects, create summarised pros and cons focusing on tangible aspects or experience qualities. Decide whether an aspect is a pro or a con based on sentiment (ratings & wording). If both positive and negative feedback exist for an aspect, place it where the majority sentiment lies (break ties by rating average).\nRULES:\n- support_count is how many DISTINCT reviews (by id) back that aspect\n- example_ids: up to 3 representative review ids that mention it\n- Exclude overly generic tokens (product, item, purchase, amazon, delivery) unless directly critiqued (e.g. 'delivery delay')\n- Prefer multi-word phrases over single adjectives\n- NEVER fabricate aspects not found in text\n- If no pros or cons, return empty arrays and notes explaining absence.\nSCHEMA: ${schemaDescription}\nINPUT_REVIEWS_JSON: ${JSON.stringify(promptObj)}\nReturn ONLY raw JSON.`;
+  const body = { contents: [ { role: 'user', parts: [{ text: systemPrompt + '\n\n' + userPrompt }] } ], generationConfig:{ temperature:0.2, topK:32, topP:0.9 } };
   const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' + encodeURIComponent(apiKey), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -108,13 +140,14 @@ async function realRewriteWithGemini(fullReviews, site) {
 async function rewriteWithGemini(reviews, site='') {
   const opts = await loadOptions();
   if (opts.fallbackMode || !opts.apiKey) {
-    return mockRewriteWithGemini(reviews);
+    // Enhanced heuristic aspect summary instead of naive frequency
+    return heuristicAspectSummary(reviews);
   }
   try {
     return await realRewriteWithGemini(reviews, site);
   } catch (e) {
     console.warn('PPC: GEMINI real failed, falling back', e.message);
-    return mockRewriteWithGemini(reviews);
+    return heuristicAspectSummary(reviews);
   }
 }
 
@@ -250,7 +283,9 @@ async function updateCrawlState(patch) {
 async function showDeepCrawlConsent(tabId) {
   const tab = await chrome.tabs.get(tabId);
   const robots = await evaluateRobotsTxt(tab.url || '');
-  await chrome.tabs.sendMessage(tabId, { type: 'PPC_SHOW_DEEP_CRAWL_MODAL', robots });
+  const opts = await loadOptions();
+  const maxPagesCap = computeMaxPages(opts);
+  await chrome.tabs.sendMessage(tabId, { type: 'PPC_SHOW_DEEP_CRAWL_MODAL', robots, maxPagesCap });
 }
 
 // Placeholder for upcoming full crawl loop
@@ -349,7 +384,7 @@ async function runDeepCrawlLoop(tabId) {
       state = await getCrawlState();
       if (!state || state.cancelled) { console.log('PPC: CRAWL-CANCELLED'); await finalizeCrawl('cancelled'); return; }
       if (state.finished) { console.log('PPC: CRAWL-ALREADY-FINISHED'); return; }
-      if (state.pagesCrawled >= state.maxPages) { console.log('PPC: CRAWL-MAX-PAGES'); await finalizeCrawl('limit'); return; }
+  if (state.pagesCrawled >= state.maxPages) { console.log('PPC: CRAWL-MAX-PAGES'); await finalizeCrawl('limit'); return; }
       const currentUrl = state.pagesCrawled === 0 ? state.startUrl : state.currentUrl;
       const tab = await chrome.tabs.get(tabId);
       if (tab.url !== currentUrl) {
@@ -388,9 +423,24 @@ async function runDeepCrawlLoop(tabId) {
       const newOnes = reviews.filter(r => r.id && !existingIds.has(r.id));
       const agg = state.aggregatedReviews.concat(newOnes);
       const pagesCrawled = state.pagesCrawled + 1;
-      state = await updateCrawlState({ aggregatedReviews: agg, pagesCrawled, currentUrl: nextPageUrl || null });
-      chrome.tabs.sendMessage(tabId, { type: 'PPC_CRAWL_PROGRESS', pagesCrawled, maxPages: state.maxPages, status: 'Crawled page', sessionId: state.sessionId });
-      if (!nextPageUrl) {
+      // Stagnation detection: if nextPageUrl points to same as current or no new reviews added twice, stop.
+      let normalizedNext = nextPageUrl ? nextPageUrl.split('#')[0] : null;
+      const normalizedCurrent = currentUrl.split('#')[0];
+      if (normalizedNext && normalizedNext === normalizedCurrent) {
+        normalizedNext = null; // prevent infinite loop
+      }
+      state = await updateCrawlState({ aggregatedReviews: agg, pagesCrawled, currentUrl: normalizedNext || null });
+      chrome.tabs.sendMessage(tabId, { type: 'PPC_CRAWL_PROGRESS', pagesCrawled, maxPages: state.maxPages, reviewCount: agg.length, status: 'Crawled page', sessionId: state.sessionId });
+      // Review count cap early stop
+      const opts = await loadOptions();
+      const maxReviews = computeMaxReviewCount(opts);
+      if (agg.length >= maxReviews) {
+        console.log('PPC: CRAWL-REVIEW-CAP reached', agg.length, '/', maxReviews);
+        await finalizeCrawl('review-cap');
+        return;
+      }
+      const stagnated = newOnes.length === 0 && !normalizedNext;
+      if (!normalizedNext || stagnated) {
         await finalizeCrawl('end-of-pages');
         return;
       }
@@ -448,25 +498,7 @@ async function updateKeyHealthAndNotify(trigger) {
   } else if (h.status === 'valid') {
     try { chrome.action.setBadgeText({ text: '' }); } catch(_){ }
   }
-  // Update toolbar icon color (green=valid, red=invalid, amber=quota, purple=network, gray=missing/other)
-  try {
-    const canvas = new OffscreenCanvas(32,32);
-    const ctx = canvas.getContext('2d');
-    let color = '#9ca3af';
-    if (h.status === 'valid') color = '#059669';
-    else if (h.status === 'invalid') color = '#dc2626';
-    else if (h.status === 'quota_exhausted') color = '#d97706';
-    else if (h.status === 'network_error') color = '#6d28d9';
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(16,16,14,0,Math.PI*2);
-    ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    const imageData = ctx.getImageData(0,0,32,32);
-    chrome.action.setIcon({ imageData: { '32': imageData } });
-  } catch(_) { /* OffscreenCanvas not supported in some contexts */ }
+  // No longer recoloring icon; keep a consistent icon. Badge still used for errors.
   return h;
 }
 
@@ -489,6 +521,34 @@ updateKeyHealthAndNotify('startup');
 // =============================
 // Message Handling
 // =============================
+async function ensureContentScript(tabId) {
+  // Try a quick ping first
+  try {
+    await new Promise((res, rej) => {
+      chrome.tabs.sendMessage(tabId, { type: 'PPC_PING' }, r => {
+        if (chrome.runtime.lastError) return rej(new Error(chrome.runtime.lastError.message));
+        res(r);
+      });
+    });
+    return true; // already present
+  } catch (_) {
+    // Attempt injection
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['src/content.js'] });
+      // re-ping
+      await new Promise((res, rej) => {
+        chrome.tabs.sendMessage(tabId, { type: 'PPC_PING' }, r => {
+          if (chrome.runtime.lastError) return rej(new Error(chrome.runtime.lastError.message));
+          res(r);
+        });
+      });
+      return true;
+    } catch (e) {
+      console.warn('PPC: ensureContentScript failed', e.message);
+      return false;
+    }
+  }
+}
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
@@ -496,9 +556,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const result = await analyzeCurrentTab(sender.tab?.id);
         sendResponse({ ok: true, result });
       } else if (msg.type === 'PPC_INIT_DEEP_CRAWL') {
-        // Trigger consent modal after robots check
-        await showDeepCrawlConsent(sender.tab.id);
-        sendResponse({ ok: true });
+        // Trigger consent modal after robots check. Popup messages have no sender.tab.
+        const tabId = sender.tab?.id || msg.tabId;
+        if (!tabId) {
+          sendResponse({ ok:false, error:'No tabId provided' });
+          return;
+        }
+        const ok = await ensureContentScript(tabId);
+        if (!ok) { sendResponse({ ok:false, error:'Could not inject content script' }); return; }
+        // One-time global consent logic
+        const globalConsent = await getGlobalConsent();
+        // Always re-evaluate robots; if disallowed we still force modal even after global acceptance
+        const tab = await chrome.tabs.get(tabId);
+        const robots = await evaluateRobotsTxt(tab.url || '');
+        if (globalConsent?.accepted && (!robots.disallowed || globalConsent.disallowAcknowledged)) {
+          // Skip modal; start immediately
+            const opts = await loadOptions();
+            const maxPages = computeMaxPages(opts);
+            await initCrawlState(tab.url, maxPages, { global:true, acceptedAt: globalConsent.acceptedAt, version: globalConsent.version||1 });
+            chrome.tabs.sendMessage(tabId, { type: 'PPC_CRAWL_PROGRESS', pagesCrawled:0, maxPages, reviewCount:0, status:'Starting… (consent remembered)' });
+            runDeepCrawlLoop(tabId);
+            sendResponse({ ok:true, tabId, skippedModal:true });
+        } else {
+          await showDeepCrawlConsent(tabId);
+          sendResponse({ ok: true, tabId, skippedModal:false });
+        }
       } else if (msg.type === 'PPC_DEEP_CRAWL_CONSENT') {
         if (msg.cancel) {
           const state = await getCrawlState();
@@ -508,12 +590,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             }
             sendResponse({ ok: true, cancelled: true });
         } else {
-          const { consent } = msg;
+          const { consent, maxPages:requestedMaxPages } = msg;
           const tab = await chrome.tabs.get(sender.tab.id);
-          const maxPages = FIXED_MAX_PAGES;
+          const opts = await loadOptions();
+          let maxPages = computeMaxPages(opts);
+          // Allow user-sent value if smaller (user might intentionally reduce scope in future UI)
+          if (requestedMaxPages && requestedMaxPages >=5 && requestedMaxPages <= maxPages) maxPages = requestedMaxPages;
           await initCrawlState(tab.url, maxPages, consent);
+          // First-time acceptance -> persist global consent
+          const existing = await getGlobalConsent();
+          const disallowAck = !!consent.robotsDisallowed && !!consent.robotsAccepted;
+          if (!existing) {
+            await setGlobalConsent({ accepted:true, acceptedAt: Date.now(), version:1, disallowAcknowledged: disallowAck });
+          } else if (disallowAck && !existing.disallowAcknowledged) {
+            // Upgrade existing record to include disallow acknowledgement
+            await setGlobalConsent({ ...existing, disallowAcknowledged: true });
+          }
           // Immediately show progress overlay
-          chrome.tabs.sendMessage(sender.tab.id, { type: 'PPC_CRAWL_PROGRESS', pagesCrawled:0, maxPages, status:'Starting…' });
+          chrome.tabs.sendMessage(sender.tab.id, { type: 'PPC_CRAWL_PROGRESS', pagesCrawled:0, maxPages, reviewCount:0, status:'Starting…' });
           runDeepCrawlLoop(sender.tab.id);
           sendResponse({ ok: true });
         }

@@ -43,11 +43,30 @@ export function coerceAndClean(summary) {
     support_count: Math.max(0, Number(x.support_count)||0),
     example_ids: Array.isArray(x.example_ids) ? x.example_ids.filter(id => typeof id === 'string').slice(0,5) : []
   })) : [];
+  const scrub = (label) => label
+    .replace(/\b(name|product|redacted|brand)\b/gi,'')
+    .replace(/\s{2,}/g,' ') // collapse spaces
+    .trim();
+  const WHITELIST_SINGLE = new Set(['battery','battery life','motor','noise','noise level','design','warranty','durability','speed','weight','size','build quality','performance','grinder','grinding','power','taste','flavor','texture','cleaning','ease of use','value','price']);
+  const filterMeaningful = (items) => items
+    .map(it => ({ ...it, label: scrub(it.label)}))
+    .filter(it => {
+      if (!it.label || it.label.length < 3) return false;
+      if (/^[0-9]+$/.test(it.label)) return false;
+      const words = it.label.split(/\s+/);
+      if (words.length === 1 && !WHITELIST_SINGLE.has(it.label.toLowerCase())) return false;
+      if (/^(this|that|these|those|have|also|like|good|great|nice|really|very)$/i.test(it.label)) return false;
+      return true;
+    });
+  const prosRaw = safeArr(summary.pros);
+  const consRaw = safeArr(summary.cons);
+  const pros = filterMeaningful(prosRaw).slice(0,8);
+  const cons = filterMeaningful(consRaw).slice(0,8);
   return {
-    pros: safeArr(summary.pros),
-    cons: safeArr(summary.cons),
-    note_pros: summary.note_pros && typeof summary.note_pros === 'string' ? summary.note_pros.slice(0,200) : (summary.pros && summary.pros.length? '' : 'No pros found'),
-    note_cons: summary.note_cons && typeof summary.note_cons === 'string' ? summary.note_cons.slice(0,200) : (summary.cons && summary.cons.length? '' : 'No cons found')
+    pros,
+    cons,
+    note_pros: pros.length ? (summary.note_pros && typeof summary.note_pros === 'string' ? summary.note_pros.slice(0,200) : '') : 'No pros found',
+    note_cons: cons.length ? (summary.note_cons && typeof summary.note_cons === 'string' ? summary.note_cons.slice(0,200) : '') : 'No cons found'
   };
 }
 
@@ -89,31 +108,120 @@ export function sampleReviewsForPrompt(reviews, maxChars = 12000) {
 }
 
 export function mockRewriteWithGemini(reviews) {
+  const STOP = new Set(['about','after','again','because','could','therefore','should','might','their','which','would','product','quality','feature','features','great','really','thing','items','having','review','reviews','amazon','india','price','value','money','works','working','using','usage','model','brand','bought','purchase','purchased','thanks','delivery','arrived','packaging','seller','color']);
   const freq = new Map();
   for (const r of reviews) {
-    const words = (r.text || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 5);
+    const words = (r.text || '').toLowerCase()
+      .replace(/\b(replaced|issue|issues)\b/g,'issue')
+      .split(/[^a-z0-9]+/)
+      .filter(w => w.length > 3 && w.length < 30 && !STOP.has(w) && !/^\d+$/.test(w));
     const unique = new Set(words);
     for (const w of unique) freq.set(w, (freq.get(w) || 0) + 1);
   }
-  const sorted = [...freq.entries()].sort((a,b)=> b[1]-a[1]).slice(0,8);
-  const mid = Math.ceil(sorted.length/2);
-  const pros = sorted.slice(0,mid).map(([label,count],i)=>({label, support_count: count, example_ids: reviews.slice(i,i+2).map(r=>r.id).filter(Boolean)}));
-  const cons = sorted.slice(mid).map(([label,count],i)=>({label, support_count: count, example_ids: reviews.slice(i,i+1).map(r=>r.id).filter(Boolean)}));
-  return { pros, cons, note_pros: pros.length? '' : 'No pros found', note_cons: cons.length? '' : 'No cons found' };
+  const candidates = [...freq.entries()].filter(([w,c]) => c > 1).sort((a,b)=> b[1]-a[1]).slice(0,14);
+  const mid = Math.ceil(candidates.length/2);
+  const make = (arr, offset) => arr.map(([label,count],i)=>({label, support_count: count, example_ids: reviews.slice((offset+i)%reviews.length, (offset+i)%reviews.length+1).map(r=>r.id).filter(Boolean)}));
+  const pros = make(candidates.slice(0,mid),0);
+  const cons = make(candidates.slice(mid),mid);
+  return coerceAndClean({ pros, cons, note_pros:'', note_cons:'' });
 }
 
 export function localFallback(reviews) {
   const counts = new Map();
+  const STOP_BG = /\b(name|product|brand|amazon|india|price|value|good|great|very|really|thing|items|works?)\b/i;
   for (const r of reviews) {
-    const tokens = (r.text || '').toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length >= 4);
+    const tokens = (r.text || '').toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length >= 3 && !/^\d+$/.test(t));
     for (let i=0;i<tokens.length-1;i++) {
       const bigram = tokens[i] + ' ' + tokens[i+1];
+      if (STOP_BG.test(bigram)) continue;
       counts.set(bigram, (counts.get(bigram)||0)+1);
     }
   }
-  const top = [...counts.entries()].sort((a,b)=> b[1]-a[1]).slice(0,10);
+  const top = [...counts.entries()].filter(([b,c])=> c>1).sort((a,b)=> b[1]-a[1]).slice(0,12);
   const half = Math.ceil(top.length/2);
   const pros = top.slice(0,half).map(([label,c])=>({label, support_count:c, example_ids:[]}));
   const cons = top.slice(half).map(([label,c])=>({label, support_count:c, example_ids:[]}));
-  return { pros, cons, note_pros: pros.length? '' : 'No pros found', note_cons: cons.length? '' : 'No cons found' };
+  return coerceAndClean({ pros, cons, note_pros:'', note_cons:'' });
+}
+
+// Aspect-oriented heuristic summarizer (used when no API key) to produce more logical pros/cons
+export function heuristicAspectSummary(reviews) {
+  if (!Array.isArray(reviews) || !reviews.length) return { pros:[], cons:[], note_pros:'No pros found', note_cons:'No cons found' };
+  const POS_LEX = new Set(['good','great','excellent','amazing','durable','sturdy','stable','bright','clear','lightweight','fast','quiet','smooth','easy','long','compact','useful','handy','sharp','powerful','reliable','efficient','strong','comfortable']);
+  const NEG_LEX = new Set(['bad','poor','slow','noisy','loud','heavy','dull','weak','flimsy','short','difficult','hard','broken','defective','expensive','costly','confusing','fragile','rough','low','leaking','leak','scratch','scratches','crack','cracked','worse']);
+  const STOP = new Set(['the','and','for','with','this','that','these','those','have','has','had','was','were','will','would','could','should','about','after','before','into','from','over','under','very','really','also','just','still','been','are','its','it','they','them','their','on','of','or','in','to','is','as','at']);
+  const ASPECT_SINGLE_WHITELIST = new Set(['battery','motor','durability','design','noise','warranty','weight','size','performance','quality','grinder','grinding','power','taste','flavor','texture','cleaning','ease','value','price','build']);
+  const phraseMap = new Map(); // key -> { phrase, reviews:Set, pos:0, neg:0, examples:Set }
+  const SENT_SPLIT = /[.!?]+/;
+  function singularize(token){
+    if (token.endsWith('ies') && token.length>4) return token.slice(0,-3)+'y';
+    if (token.endsWith('es') && token.length>3) return token.slice(0,-2);
+    if (token.endsWith('s') && token.length>3) return token.slice(0,-1);
+    return token;
+  }
+  function addPhrase(rawPhrase, reviewId, orientation) {
+    const phrase = rawPhrase.trim();
+    if (!phrase || phrase.length < 3) return;
+    if (/^(this|that|also|have|has|good|great|nice|really|very)$/i.test(phrase)) return;
+    const key = phrase.toLowerCase();
+    let entry = phraseMap.get(key);
+    if (!entry) { entry = { phrase, reviews:new Set(), pos:0, neg:0, examples:new Set() }; phraseMap.set(key, entry); }
+    entry.reviews.add(reviewId);
+    if (orientation === 'pos') entry.pos++; else if (orientation === 'neg') entry.neg++;
+    if (entry.examples.size < 3) entry.examples.add(reviewId);
+  }
+  for (const r of reviews) {
+    const text = (r.text||'').toLowerCase();
+    const ratingBias = r.rating != null ? (r.rating >=4 ? 0.6 : (r.rating <=2 ? -0.6 : 0)) : 0;
+    const sentences = text.split(SENT_SPLIT).slice(0,60);
+    for (const s of sentences) {
+      const tokens = s.split(/[^a-z0-9]+/).filter(t => t && t.length<40);
+      if (!tokens.length) continue;
+      // Determine sentence sentiment orientation heuristic
+      let posHits=0, negHits=0;
+      for (const t of tokens) { if (POS_LEX.has(t)) posHits++; else if (NEG_LEX.has(t)) negHits++; }
+      const sentimentScore = (posHits - negHits) + ratingBias;
+      const orientation = sentimentScore > 0.3 ? 'pos' : (sentimentScore < -0.3 ? 'neg' : null);
+      // Build candidate bigrams/trigrams biased toward nouns (approx by excluding stopwords edges)
+      for (let i=0;i<tokens.length;i++) {
+        const t1 = tokens[i]; if (!t1) continue;
+        if (STOP.has(t1) && !ASPECT_SINGLE_WHITELIST.has(t1)) continue;
+        const singles = singularize(t1);
+        if (!STOP.has(t1) && (ASPECT_SINGLE_WHITELIST.has(t1) || t1.length>4)) addPhrase(singles, r.id, orientation);
+        // bigram
+        if (i+1<tokens.length) {
+          const t2 = tokens[i+1]; if (!t2) continue;
+          if (STOP.has(t2)) continue;
+          const bigram = singularize(t1)+' '+singularize(t2);
+          if (!/\b(?:the|and|for)\b/.test(bigram)) addPhrase(bigram, r.id, orientation);
+        }
+        // trigram
+        if (i+2<tokens.length) {
+          const t2 = tokens[i+1], t3 = tokens[i+2];
+            if (STOP.has(t2) || STOP.has(t3)) continue;
+            const trigram = singularize(t1)+' '+singularize(t2)+' '+singularize(t3);
+            addPhrase(trigram, r.id, orientation);
+        }
+      }
+    }
+  }
+  // Aggregate and classify
+  const pros=[]; const cons=[];
+  for (const entry of phraseMap.values()) {
+    const support = entry.reviews.size;
+    if (support < 2) continue; // need at least 2 distinct reviews
+    const net = entry.pos - entry.neg;
+    let bucket=null;
+    if (net > 0.5) bucket='pros'; else if (net < -0.5) bucket='cons';
+    else {
+      // tie-break using average polarity ratio
+      if (entry.pos > entry.neg) bucket='pros'; else if (entry.neg > entry.pos) bucket='cons'; else bucket=null;
+    }
+    if (!bucket) continue;
+    const obj = { label: entry.phrase, support_count: support, example_ids: [...entry.examples] };
+    if (bucket==='pros') pros.push(obj); else cons.push(obj);
+  }
+  pros.sort((a,b)=> b.support_count - a.support_count || a.label.localeCompare(b.label));
+  cons.sort((a,b)=> b.support_count - a.support_count || a.label.localeCompare(b.label));
+  return coerceAndClean({ pros:pros.slice(0,14), cons:cons.slice(0,14), note_pros:'', note_cons:'' });
 }

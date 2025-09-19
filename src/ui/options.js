@@ -8,7 +8,9 @@ function load() {
     if (!resp || !resp.ok) return;
     const o = resp.options;
     qs('apiKey').value = o.apiKey || '';
-    qs('fallbackMode').checked = !!o.fallbackMode;
+  qs('fallbackMode').checked = !!o.fallbackMode;
+  if (o.maxPagesCap) qs('maxPagesCap').value = o.maxPagesCap;
+  if (o.maxReviewCount) qs('maxReviewCount').value = o.maxReviewCount;
     refreshKeyHealth();
   });
 }
@@ -17,6 +19,8 @@ function save() {
   const payload = {
     apiKey: qs('apiKey').value.trim(),
     fallbackMode: qs('fallbackMode').checked,
+    maxPagesCap: parseInt(qs('maxPagesCap').value,10) || undefined,
+    maxReviewCount: parseInt(qs('maxReviewCount').value,10) || undefined,
   };
   chrome.runtime.sendMessage({ type: 'PPC_SAVE_OPTIONS', payload }, resp => {
     qs('saveStatus').textContent = resp && resp.ok ? 'Saved.' : 'Error saving';
