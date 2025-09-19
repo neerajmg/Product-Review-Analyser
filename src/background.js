@@ -1,112 +1,75 @@
 /*
-// Gemini Integration (Mock + Real w/ Schema Validation)
-// Extracted helper functions imported from summary_utils for testability.
-import { SUMMARY_SCHEMA, validateAgainstSchema, coerceAndClean, extractFirstJsonBlock, sampleReviewsForPrompt, mockRewriteWithGemini, localFallback } from './lib/summary_utils.js';
-  required: ['pros','cons','note_pros','note_cons'],
-  properties: {
-    pros: { type: 'array', maxItems: 8, items: { type: 'object', required:['label','support_count','example_ids'], properties:{ label:{type:'string', maxLength:120}, support_count:{type:'number'}, example_ids:{type:'array', items:{type:'string'}} } } },
-    cons: { type: 'array', maxItems: 8, items: { type: 'object', required:['label','support_count','example_ids'], properties:{ label:{type:'string', maxLength:120}, support_count:{type:'number'}, example_ids:{type:'array', items:{type:'string'}} } } },
-    note_pros: { type:'string' },
-    note_cons: { type:'string' }
-  }
+ * Product Pros/Cons Extractor — Background Service Worker
+ * Restored after refactor: constants & utility functions + Gemini integration.
+ */
+
+import { validateAgainstSchema, coerceAndClean, extractFirstJsonBlock, sampleReviewsForPrompt, mockRewriteWithGemini, localFallback } from './lib/summary_utils.js';
+
+// =============================
+// Section: Constants & Settings
+// =============================
+const PPC_EXT_VERSION = '0.1.0';
+const CRAWL_DEFAULT_DELAY_MS = 1200; // mean
+const CRAWL_JITTER_MS = 300; // ± jitter
+const CRAWL_MIN_DELAY_MS = 500; // enforced minimum
+const GEMINI_RATE_LIMIT_MS = 3000; // at most one request / 3s
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const FIXED_MAX_PAGES = 30; // fixed crawl limit per UX decision
+
+// Storage keys
+const STORAGE_KEYS = {
+  OPTIONS: 'ppc_options',
+  CRAWL_STATE: 'ppc_crawl_state',
+  CACHE: 'ppc_cache',
+  KEY_HEALTH: 'ppc_key_health'
 };
 
-function validateAgainstSchema(obj, schema=SUMMARY_SCHEMA) {
-  if (schema.type === 'object') {
-    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
-    if (schema.required) {
-      for (const k of schema.required) if (!(k in obj)) return false;
-    }
-    if (schema.properties) {
-      for (const [k, def] of Object.entries(schema.properties)) {
-        if (obj[k] === undefined) continue;
-        if (!validateAgainstSchema(obj[k], def)) return false;
-      }
-    }
-    return true;
-  }
-  if (schema.type === 'array') {
-    if (!Array.isArray(obj)) return false;
-    if (schema.maxItems !== undefined && obj.length > schema.maxItems) return false;
-    if (schema.items) return obj.every(it => validateAgainstSchema(it, schema.items));
-    return true;
-  }
-  if (schema.type === 'string') return typeof obj === 'string' && (schema.maxLength? obj.length <= schema.maxLength : true);
-  if (schema.type === 'number') return typeof obj === 'number' && !Number.isNaN(obj);
-  return false;
+// In-memory trackers
+let lastGeminiRequestTs = 0;
+let keyHealthCache = null;
+
+// =============================
+// Utility Functions
+// =============================
+function sleepPolite(baseMs = CRAWL_DEFAULT_DELAY_MS) {
+  const jitter = (Math.random() * 2 - 1) * CRAWL_JITTER_MS;
+  const delay = Math.max(CRAWL_MIN_DELAY_MS, Math.round(baseMs + jitter));
+  return new Promise(res => setTimeout(res, delay));
 }
 
-function coerceAndClean(summary) {
-  const safeArr = (arr) => Array.isArray(arr) ? arr.filter(x => x && typeof x.label === 'string').slice(0,8).map(x => ({
-    label: String(x.label).slice(0,120),
-    support_count: Math.max(0, Number(x.support_count)||0),
-    example_ids: Array.isArray(x.example_ids) ? x.example_ids.filter(id => typeof id === 'string').slice(0,5) : []
-  })) : [];
-  return {
-    pros: safeArr(summary.pros),
-    cons: safeArr(summary.cons),
-    note_pros: summary.note_pros && typeof summary.note_pros === 'string' ? summary.note_pros.slice(0,200) : (summary.pros && summary.pros.length? '' : 'No pros found'),
-    note_cons: summary.note_cons && typeof summary.note_cons === 'string' ? summary.note_cons.slice(0,200) : (summary.cons && summary.cons.length? '' : 'No cons found')
-  };
+async function sha256(text) {
+  const enc = new TextEncoder();
+  const buf = await crypto.subtle.digest('SHA-256', enc.encode(text));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-function extractFirstJsonBlock(text) {
-  // find first '{' then attempt brace match
-  const start = text.indexOf('{');
-  if (start === -1) return null;
-  let depth = 0;
-  for (let i=start; i<text.length; i++) {
-    const ch = text[i];
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        const slice = text.slice(start, i+1);
-        return slice;
-      }
-    }
-  }
-  return null;
+async function computeCacheKey(url, reviews) {
+  const hashes = await Promise.all(reviews.map(r => sha256(r.text || '')));
+  hashes.sort();
+  return sha256(url + hashes.join(''));
 }
 
-// Sampling to control prompt size
-function sampleReviewsForPrompt(reviews, maxChars=12000) {
-  if (!Array.isArray(reviews) || !reviews.length) return [];
-  let acc = [];
-  let total = 0;
-  // Simple stratified by rating if available
-  const buckets = new Map();
-  for (const r of reviews) {
-    const key = r.rating != null ? String(r.rating) : 'na';
-    if (!buckets.has(key)) buckets.set(key, []);
-    buckets.get(key).push(r);
-  }
-  for (const b of buckets.values()) b.sort((a,b)=> (b.text||'').length - (a.text||'').length);
-  const ordered = Array.from(buckets.values()).flat();
-  for (const r of ordered) {
-    const chunk = (r.text||'').slice(0,800);
-    if (total + chunk.length > maxChars) break;
-    acc.push({ id: r.id, text: chunk, rating: r.rating });
-    total += chunk.length;
-  }
-  return acc;
+function loadOptions() {
+  return new Promise(resolve => {
+    chrome.storage.sync.get(STORAGE_KEYS.OPTIONS, data => {
+      resolve(Object.assign({ fallbackMode: true, apiKey: '' }, data[STORAGE_KEYS.OPTIONS] || {}));
+    });
+  });
 }
+function saveOptions(opts) { return new Promise(r => chrome.storage.sync.set({ [STORAGE_KEYS.OPTIONS]: opts }, r)); }
 
-async function mockRewriteWithGemini(reviews) {
-  console.log('PPC: GEMINI-REQ (mock) - reviewCount=', reviews.length);
-  const freq = new Map();
-  for (const r of reviews) {
-    const words = (r.text || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 5);
-    const unique = new Set(words);
-    for (const w of unique) freq.set(w, (freq.get(w) || 0) + 1);
-  }
-  const sorted = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
-  const mid = Math.ceil(sorted.length / 2);
-  const pros = sorted.slice(0, mid).map(([label, count], i) => ({ label, support_count: count, example_ids: reviews.slice(i, i+2).map(r => r.id).filter(Boolean) }));
-  const cons = sorted.slice(mid).map(([label, count], i) => ({ label, support_count: count, example_ids: reviews.slice(i, i+1).map(r => r.id).filter(Boolean) }));
-  const result = { pros, cons, note_pros: pros.length ? '' : 'No pros found', note_cons: cons.length ? '' : 'No cons found' };
-  console.log('PPC: GEMINI-RESP (mock)', result);
-  return result;
+function getCache() { return new Promise(r => chrome.storage.local.get(STORAGE_KEYS.CACHE, d => r(d[STORAGE_KEYS.CACHE] || {}))); }
+function setCache(obj) { return new Promise(r => chrome.storage.local.set({ [STORAGE_KEYS.CACHE]: obj }, r)); }
+
+function getKeyHealth() { return new Promise(r => chrome.storage.local.get(STORAGE_KEYS.KEY_HEALTH, d => r(d[STORAGE_KEYS.KEY_HEALTH] || null))); }
+function setKeyHealth(h) { keyHealthCache = h; return new Promise(r => chrome.storage.local.set({ [STORAGE_KEYS.KEY_HEALTH]: h }, r)); }
+
+function redactPII(text) {
+  if (!text) return text;
+  return text
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[REDACTED_EMAIL]')
+    .replace(/\b\+?\d[\d\s().-]{7,}\b/g, '[REDACTED_PHONE]')
+    .replace(/\b([A-Z][a-z]{2,})(\s+[A-Z][a-z]{2,}){0,2}\b/g, '[REDACTED_NAME]');
 }
 
 async function realRewriteWithGemini(fullReviews, site) {
@@ -155,26 +118,7 @@ async function rewriteWithGemini(reviews, site='') {
   }
 }
 
-// =============================
-// Local Fallback Summarizer
-// =============================
-/** Deterministic summarizer using n-gram frequency buckets */
-function localFallback(reviews) {
-  console.log('PPC: FALLBACK-SUMMARIZE start');
-  const counts = new Map();
-  for (const r of reviews) {
-    const tokens = (r.text || '').toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length >= 4);
-    for (let i = 0; i < tokens.length - 1; i++) {
-      const bigram = tokens[i] + ' ' + tokens[i + 1];
-      counts.set(bigram, (counts.get(bigram) || 0) + 1);
-    }
-  }
-  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
-  const half = Math.ceil(top.length / 2);
-  const pros = top.slice(0, half).map(([label, c]) => ({ label, support_count: c, example_ids: [] }));
-  const cons = top.slice(half).map(([label, c]) => ({ label, support_count: c, example_ids: [] }));
-  return { pros, cons, note_pros: pros.length ? '' : 'No pros found', note_cons: cons.length ? '' : 'No cons found' };
-}
+// localFallback imported
 
 // =============================
 // Caching Helpers
