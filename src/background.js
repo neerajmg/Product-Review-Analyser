@@ -66,7 +66,14 @@ function loadOptions() {
       
       // Safe access to stored options
       const storedOptions = data && data[STORAGE_KEYS.OPTIONS] ? data[STORAGE_KEYS.OPTIONS] : {};
-      resolve(Object.assign(defaults, storedOptions));
+      const options = Object.assign(defaults, storedOptions);
+      
+      // Always default fallbackMode to false unless explicitly set to true by user
+      if (!storedOptions.hasOwnProperty('fallbackMode')) {
+        options.fallbackMode = false;
+      }
+      
+      resolve(options);
     });
   });
 }
