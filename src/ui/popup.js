@@ -7,9 +7,6 @@ const resultsEl = document.getElementById('results');
 const openOptionsBtn = document.getElementById('openOptionsBtn');
 const healthDot = document.getElementById('healthDot');
 const clearCacheBtn = document.getElementById('clearCacheBtn');
-const apiKeyHelp = document.getElementById('apiKeyHelp');
-const statusMessage = document.getElementById('statusMessage');
-const rateLimitIndicator = document.getElementById('rateLimitIndicator');
 
 // Clear cache button with better UX
 if (clearCacheBtn) {
@@ -57,43 +54,6 @@ function setBtnState(loading = false, text = 'Analyze Reviews') {
     deepCrawlBtn.disabled = false;
     btnText.textContent = text;
     deepCrawlBtn.style.background = '';
-  }
-}
-
-// Update API key status message based on key health
-function updateApiKeyStatus(hasValidKey, provider = 'AI') {
-  if (hasValidKey) {
-    apiKeyHelp.className = 'ai-status success';
-    statusMessage.textContent = `✅ ${provider} API configured and ready`;
-  } else {
-    apiKeyHelp.className = 'ai-status warning';
-    statusMessage.textContent = '⚠️ Please provide your AI service API keys in Settings for the extension to work perfectly';
-  }
-}
-
-// Update rate limit indicator
-function updateRateLimitStatus(status, nextRetryAfter = null) {
-  rateLimitIndicator.className = 'rate-limit-indicator';
-  
-  switch (status) {
-    case 'available':
-      rateLimitIndicator.classList.add('available');
-      rateLimitIndicator.title = 'API available';
-      break;
-    case 'rate_limited':
-      rateLimitIndicator.classList.add('limited');
-      rateLimitIndicator.title = nextRetryAfter ? 
-        `Rate limited - retry in ${nextRetryAfter}s` : 'Rate limited';
-      break;
-    case 'quota_exceeded':
-      rateLimitIndicator.classList.add('error');
-      rateLimitIndicator.title = 'Quota exceeded';
-      break;
-    case 'error':
-    default:
-      rateLimitIndicator.classList.add('error');
-      rateLimitIndicator.title = 'API error';
-      break;
   }
 }
 
@@ -208,39 +168,21 @@ function renderSummary(summary) {
   });
 }
 
-// Initialize status indicators
-function initStatusIndicators() {
-  // Check API key health status
+// Initialize health indicator system
+function initHealthIndicators() {
+  updateHealthIndicator('gemini-health', 'checking');
+  updateHealthIndicator('openai-health', 'checking');
+  
+  // Check API health status using existing message type
   chrome.runtime.sendMessage({type: 'PPC_GET_KEY_HEALTH'}, (response) => {
     if (response && response.ok && response.health) {
-      const hasValidKey = response.health.status === 'valid' || 
-                         response.health.gemini === 'valid' || 
-                         response.health.openai === 'valid';
-      
-      let provider = 'AI';
-      if (response.health.gemini === 'valid') provider = 'Google AI';
-      else if (response.health.openai === 'valid') provider = 'OpenAI';
-      
-      updateApiKeyStatus(hasValidKey, provider);
-      
-      // Update health dot in header
-      if (healthDot) {
-        healthDot.className = 'health-indicator ' + (hasValidKey ? 'healthy' : 'error');
-      }
+      const geminiStatus = response.health.gemini === 'valid' ? 'healthy' : 'error';
+      const openaiStatus = response.health.openai === 'valid' ? 'healthy' : 'error';
+      updateHealthIndicator('gemini-health', geminiStatus);
+      updateHealthIndicator('openai-health', openaiStatus);
     } else {
-      updateApiKeyStatus(false);
-      if (healthDot) {
-        healthDot.className = 'health-indicator error';
-      }
-    }
-  });
-  
-  // Check rate limit status
-  chrome.runtime.sendMessage({type: 'PPC_CHECK_RATE_LIMIT'}, (response) => {
-    if (response && response.ok) {
-      updateRateLimitStatus(response.status, response.nextRetryAfter);
-    } else {
-      updateRateLimitStatus('error');
+      updateHealthIndicator('gemini-health', 'error');
+      updateHealthIndicator('openai-health', 'error');
     }
   });
 }
@@ -248,16 +190,7 @@ function initStatusIndicators() {
 // Initialize popup on load
 document.addEventListener('DOMContentLoaded', () => {
   console.log('PPC: POPUP LOADED');
-  initStatusIndicators();
-  
-  // Refresh status every 10 seconds
-  setInterval(() => {
-    chrome.runtime.sendMessage({type: 'PPC_CHECK_RATE_LIMIT'}, (response) => {
-      if (response && response.ok) {
-        updateRateLimitStatus(response.status, response.nextRetryAfter);
-      }
-    });
-  }, 10000);
+  initHealthIndicators();
   
   // Add click handlers for icon buttons
   const clearCacheBtn = document.getElementById('clear-cache-btn');
