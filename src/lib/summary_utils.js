@@ -48,20 +48,55 @@ export function coerceAndClean(summary) {
     .replace(/\s{2,}/g,' ') // collapse spaces
     .trim();
   const WHITELIST_SINGLE = new Set(['battery','battery life','motor','noise','noise level','design','warranty','durability','speed','weight','size','build quality','performance','grinder','grinding','power','taste','flavor','texture','cleaning','ease of use','value','price']);
+  // Consolidate overlapping / nested phrases (e.g. "battery" & "battery life" => keep longer) and merge evidence.
+  function consolidatePhrases(items) {
+    const kept = [];
+    function escapeReg(s){return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
+    for (const item of items.sort((a,b)=> b.label.length - a.label.length || b.support_count - a.support_count)) {
+      const lower = item.label.toLowerCase();
+      let merged = false;
+      for (const k of kept) {
+        const pattern = new RegExp('\\b'+escapeReg(lower)+'\\b','i');
+        if (pattern.test(k.label.toLowerCase())) {
+          // current item is a subset of an already kept longer phrase -> drop entirely
+          merged = true; break;
+        }
+        // If kept phrase is subset of current longer phrase, upgrade kept phrase
+        const revPattern = new RegExp('\\b'+escapeReg(k.label.toLowerCase())+'\\b','i');
+        if (revPattern.test(lower) && item.support_count >= k.support_count) {
+          // replace k with longer item (merge metadata)
+            const newExampleIds = [...k.example_ids];
+            for (const id of (item.example_ids||[])) if (newExampleIds.length <5 && !newExampleIds.includes(id)) newExampleIds.push(id);
+            k.label = item.label; k.support_count = item.support_count; k.example_ids = newExampleIds;
+            merged = true; break;
+        }
+      }
+      if (!merged) kept.push({...item});
+    }
+    return kept;
+  }
   const filterMeaningful = (items) => items
     .map(it => ({ ...it, label: scrub(it.label)}))
     .filter(it => {
       if (!it.label || it.label.length < 3) return false;
       if (/^[0-9]+$/.test(it.label)) return false;
       const words = it.label.split(/\s+/);
-      if (words.length === 1 && !WHITELIST_SINGLE.has(it.label.toLowerCase())) return false;
+      if (words.length === 1) {
+        const lower = it.label.toLowerCase();
+        // Allow if whitelisted OR sufficiently supported & not a generic adjective
+        if (!WHITELIST_SINGLE.has(lower)) {
+          if (!(it.support_count >= 3 && lower.length >= 4 && !/^(good|great|nice|very|really|also|have|has)$/i.test(lower))) return false;
+        }
+      }
       if (/^(this|that|these|those|have|also|like|good|great|nice|really|very)$/i.test(it.label)) return false;
       return true;
-    });
+    })
+    // consolidate nested phrases after filtering
+    ;
   const prosRaw = safeArr(summary.pros);
   const consRaw = safeArr(summary.cons);
-  const pros = filterMeaningful(prosRaw).slice(0,8);
-  const cons = filterMeaningful(consRaw).slice(0,8);
+  const pros = consolidatePhrases(filterMeaningful(prosRaw)).slice(0,8);
+  const cons = consolidatePhrases(filterMeaningful(consRaw)).slice(0,8);
   return {
     pros,
     cons,
@@ -194,6 +229,9 @@ export function heuristicAspectSummary(reviews) {
           if (STOP.has(t2)) continue;
           const bigram = singularize(t1)+' '+singularize(t2);
           if (!/\b(?:the|and|for)\b/.test(bigram)) addPhrase(bigram, r.id, orientation);
+          // adjective+noun pattern for negative emphasis (e.g., noisy motor, flimsy build, short battery life)
+          if (NEG_LEX.has(t1) && !STOP.has(t2)) addPhrase(t1+' '+t2, r.id, 'neg');
+          if (POS_LEX.has(t1) && !STOP.has(t2)) addPhrase(t1+' '+t2, r.id, 'pos');
         }
         // trigram
         if (i+2<tokens.length) {
@@ -201,25 +239,122 @@ export function heuristicAspectSummary(reviews) {
             if (STOP.has(t2) || STOP.has(t3)) continue;
             const trigram = singularize(t1)+' '+singularize(t2)+' '+singularize(t3);
             addPhrase(trigram, r.id, orientation);
+            // special handling: short battery life pattern
+            if ((t1==='short' || t1==='long') && t2==='battery' && t3==='life') {
+              addPhrase(t1+' battery life', r.id, t1==='short' ? 'neg':'pos');
+            }
+        }
+        // cleaning difficulty phrases
+        if (t1==='cleaning' && i+1<tokens.length) {
+          const t2 = tokens[i+1];
+          if (t2==='difficult' || t2==='hard') addPhrase('cleaning difficult', r.id, 'neg');
         }
       }
     }
+  }
+  // Canonical merge of similar phrases (order-insensitive for small sets) to reduce duplicates
+  const LINKING = new Set(['became','is','was','were','be','been','being','very','really','quite','too']);
+  const mergedMap = new Map();
+  for (const [key, entry] of phraseMap.entries()) {
+    const tokens = entry.phrase.toLowerCase().split(/\s+/).filter(t => t && !LINKING.has(t));
+    let canonKey = null;
+    if (tokens.length > 1 && tokens.length <= 3) {
+      const sorted = [...tokens].sort();
+      canonKey = sorted.join('|');
+    }
+    if (!canonKey) { mergedMap.set(key, entry); continue; }
+    let existing = mergedMap.get(canonKey);
+    if (!existing) {
+      // choose representative phrase: prefer one without linking words and shorter token count
+      existing = { ...entry };
+      mergedMap.set(canonKey, existing);
+    } else {
+      // merge stats
+      for (const rId of entry.reviews) existing.reviews.add(rId);
+      existing.pos += entry.pos;
+      existing.neg += entry.neg;
+      for (const ex of entry.examples) if (existing.examples.size < 3) existing.examples.add(ex);
+      // choose better phrase (fewer tokens or no linking words)
+      const existingTokens = existing.phrase.split(/\s+/).filter(Boolean);
+      const candTokens = entry.phrase.split(/\s+/).filter(Boolean);
+      const existingHasLink = existingTokens.some(t=>LINKING.has(t.toLowerCase()));
+      const candHasLink = candTokens.some(t=>LINKING.has(t.toLowerCase()));
+      if ((candTokens.length < existingTokens.length) || (existingHasLink && !candHasLink)) {
+        existing.phrase = entry.phrase;
+      }
+    }
+  }
+  // Replace phraseMap values with merged results if any merges occurred
+  if (mergedMap.size) {
+    // If mergedMap keys are canonical compound keys, keep their entry under a synthetic key of phrase
+    const newPhraseMap = new Map();
+    for (const v of mergedMap.values()) newPhraseMap.set(v.phrase.toLowerCase(), v);
+    phraseMap.clear();
+    for (const [k,v] of newPhraseMap.entries()) phraseMap.set(k,v);
   }
   // Aggregate and classify
   const pros=[]; const cons=[];
   for (const entry of phraseMap.values()) {
     const support = entry.reviews.size;
-    if (support < 2) continue; // need at least 2 distinct reviews
+    if (support < 2) {
+      // Allow strong negative singletons from low-rated context
+      if (!(entry.neg>=1 && /(noisy|short|flimsy|weak|difficult|hard|broken|defective|scratch|crack|leak|leaking|expensive)/.test(entry.phrase))) continue;
+    }
     const net = entry.pos - entry.neg;
     let bucket=null;
-    if (net > 0.5) bucket='pros'; else if (net < -0.5) bucket='cons';
+    if (net > 0.3) bucket='pros'; else if (net < -0.3) bucket='cons';
     else {
       // tie-break using average polarity ratio
-      if (entry.pos > entry.neg) bucket='pros'; else if (entry.neg > entry.pos) bucket='cons'; else bucket=null;
+      if (entry.pos > entry.neg) bucket='pros'; else if (entry.neg > entry.pos) bucket='cons'; else {
+        // If still neutral but strong support, infer from majority of associated ratings if available
+        if (support >= 3) {
+          // crude heuristic: if most related reviews are high rated treat as pro, low rated as con
+          bucket = 'pros'; // optimistic default
+          if (entry.neg > entry.pos) bucket='cons';
+        }
+      }
     }
+    // direct override: if phrase contains a negative adjective and has any neg evidence
+    if (!bucket && /\b(noisy|short|flimsy|weak|difficult|hard|broken|defective|scratch|crack|leak|leaking|expensive)\b/.test(entry.phrase) && entry.neg>=1) bucket='cons';
     if (!bucket) continue;
     const obj = { label: entry.phrase, support_count: support, example_ids: [...entry.examples] };
     if (bucket==='pros') pros.push(obj); else cons.push(obj);
+  }
+  // Post-pass: move obviously negative lexical phrases into cons if misbucketed
+  const NEG_HINT = /(noisy|short|difficult|hard|flimsy|weak|broken|defective|scratch|crack|leak|leaking|expensive)/i;
+  for (let i=pros.length-1; i>=0; i--) {
+    if (NEG_HINT.test(pros[i].label) && !cons.find(c=>c.label===pros[i].label)) {
+      cons.push(pros[i]); pros.splice(i,1);
+    }
+  }
+  // Likewise move strongly positive that slipped into cons
+  const POS_HINT = /(quiet|long|durable|sturdy|stable|easy|comfortable|powerful|reliable|efficient|sharp)/i;
+  for (let i=cons.length-1; i>=0; i--) {
+    if (POS_HINT.test(cons[i].label) && !pros.find(p=>p.label===cons[i].label)) {
+      pros.push(cons[i]); cons.splice(i,1);
+    }
+  }
+  // Fallback: if cons empty, allow inclusion of single-support negative phrases
+  if (!cons.length) {
+    const negativeSingles = [];
+    for (const entry of phraseMap.values()) {
+      if (entry.reviews.size === 1 && entry.neg > 0 && /(noisy|short|flimsy|weak|difficult|hard|broken|defective|scratch|crack|leak|leaking|expensive)/.test(entry.phrase)) {
+        negativeSingles.push({ label: entry.phrase, support_count: entry.reviews.size, example_ids: [...entry.examples] });
+      }
+    }
+    negativeSingles.sort((a,b)=> b.support_count - a.support_count || a.label.localeCompare(b.label));
+    cons.push(...negativeSingles.slice(0,5));
+  }
+  // Fallback: if pros empty, include top frequent neutral/positive phrases
+  if (!pros.length) {
+    const positiveSingles = [];
+    for (const entry of phraseMap.values()) {
+      if (entry.reviews.size === 1 && entry.pos > 0 && /(long|quiet|durable|sturdy|easy|comfortable|powerful|reliable|efficient|sharp|fast|lightweight)/.test(entry.phrase)) {
+        positiveSingles.push({ label: entry.phrase, support_count: entry.reviews.size, example_ids: [...entry.examples] });
+      }
+    }
+    positiveSingles.sort((a,b)=> b.support_count - a.support_count || a.label.localeCompare(b.label));
+    pros.push(...positiveSingles.slice(0,5));
   }
   pros.sort((a,b)=> b.support_count - a.support_count || a.label.localeCompare(b.label));
   cons.sort((a,b)=> b.support_count - a.support_count || a.label.localeCompare(b.label));
