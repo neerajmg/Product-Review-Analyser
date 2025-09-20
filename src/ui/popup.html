@@ -6,30 +6,206 @@
   <title>Review Analyzer</title>
   <link rel="stylesheet" href="../../styles.css" />
   <style>
-    body { font-family: system-ui, Arial, sans-serif; margin: 12px; width: 320px; }
-    button { cursor: pointer; }
-    #results { max-height: 220px; overflow:auto; font-size: 12px; border:1px solid #ccc; padding:6px; margin-top:8px; }
-    .section-title { font-weight:600; margin-top:6px; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+      margin: 0; 
+      width: 380px; 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #333;
+    }
+    
+    .popup-container {
+      background: white;
+      margin: 0;
+      padding: 20px;
+      border-radius: 12px 12px 0 0;
+      box-shadow: 0 -4px 20px rgba(0,0,0,0.1);
+    }
+    
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    
+    .title-section {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .app-title {
+      font-size: 20px;
+      font-weight: 700;
+      margin: 0;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    
+    .header-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    
+    .icon-btn {
+      background: #f3f4f6;
+      border: none;
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+      color: #6b7280;
+    }
+    
+    .icon-btn:hover {
+      background: #e5e7eb;
+      transform: translateY(-1px);
+    }
+    
+    .main-action {
+      margin-bottom: 16px;
+    }
+    
+    .analyze-btn {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      width: 100%;
+      padding: 14px 20px;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    }
+    
+    .analyze-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+    }
+    
+    .analyze-btn:active {
+      transform: translateY(0);
+    }
+    
+    .analyze-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+    
+    .status-section {
+      min-height: 20px;
+      margin-bottom: 12px;
+    }
+    
+    .status-text {
+      font-size: 13px;
+      color: #6b7280;
+      font-style: italic;
+    }
+    
+    .results-section {
+      max-height: 200px;
+      overflow: auto;
+      font-size: 12px;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+    
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 12px;
+      border-top: 1px solid #e5e7eb;
+    }
+    
+    .settings-link {
+      color: #667eea;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      transition: color 0.2s ease;
+    }
+    
+    .settings-link:hover {
+      color: #764ba2;
+      text-decoration: underline;
+    }
+    
+    .ai-status {
+      font-size: 10px;
+      color: #9ca3af;
+      line-height: 1.3;
+      text-align: right;
+      max-width: 180px;
+    }
+    
+    .health-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #d1d5db;
+      transition: background 0.2s ease;
+    }
+    
+    .health-indicator.healthy { background: #10b981; }
+    .health-indicator.warning { background: #f59e0b; }
+    .health-indicator.error { background: #ef4444; }
+    
+    /* Icons using CSS */
+    .icon-refresh::before { content: "🔄"; }
+    .icon-settings::before { content: "⚙️"; }
   </style>
 </head>
 <body>
-  <style>
-    .health-dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#999;vertical-align:middle;margin-left:6px;}
-  </style>
-  <h1 class="ppc-popup-title">Review Analyzer <span id="healthDot" class="health-dot"></span></h1>
-  <div class="ppc-flex-row ppc-gap mt-8">
-  <button id="deepCrawlBtn" class="ppc-btn flex-1">Analyze Reviews</button>
+  <div class="popup-container">
+    <div class="header">
+      <div class="title-section">
+        <h1 class="app-title">Review Analyzer</h1>
+        <div id="healthDot" class="health-indicator"></div>
+      </div>
+      <div class="header-actions">
+        <button id="clearCacheBtn" class="icon-btn icon-refresh" title="Clear Cache"></button>
+        <button id="openOptionsBtn" class="icon-btn icon-settings" title="Settings"></button>
+      </div>
+    </div>
+    
+    <div class="main-action">
+      <button id="deepCrawlBtn" class="analyze-btn">
+        <span id="btnText">Analyze Reviews</span>
+      </button>
+    </div>
+    
+    <div class="status-section">
+      <div id="status" class="status-text"></div>
+    </div>
+    
+    <div id="results" class="results-section" hidden></div>
+    
+    <div class="footer">
+      <a href="#" id="openOptions" class="settings-link">Advanced Settings</a>
+      <div id="apiKeyHelp" class="ai-status">
+        AI-powered analysis with multi-provider support
+      </div>
+    </div>
   </div>
-  <div id="apiKeyHelp" class="ppc-api-help">
-    <span id="keyIndicator" class="ppc-key-indicator"></span>
-    Provide your Gemini API key in Settings for cloud summarization; otherwise local fallback will be used.
-  </div>
-  <div id="status" class="ppc-status"></div>
-  <div id="results" hidden></div>
-  <div class="ppc-footer-link">
-    <a href="#" id="openOptions">Settings</a>
-    <button id="clearCacheBtn" class="ppc-text-btn">Clear Cache</button>
-  </div>
+  
   <script src="popup.js"></script>
 </body>
 </html>
