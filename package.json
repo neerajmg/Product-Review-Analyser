@@ -1,9 +1,28 @@
 {
-  "name": "product-pros-cons-extractor",
-  "version": "0.1.0",
-  "private": true,
+  "name": "universal-ecommerce-review-analyzer",
+  "version": "2.0.0",
+  "description": "Universal Chrome extension that analyzes product reviews on ANY e-commerce website using AI (OpenAI, Anthropic, Gemini)",
+  "keywords": [
+    "chrome-extension",
+    "ecommerce",
+    "product-reviews",
+    "ai-analysis",
+    "shopping",
+    "openai",
+    "anthropic",
+    "gemini",
+    "universal",
+    "review-analysis"
+  ],
   "type": "module",
   "scripts": {
     "test": "node tests/summary_utils.test.js"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/neerajmg/Product-Review-Extractor.git"
+  },
+  "author": "Neeraj MG",
+  "license": "MIT",
+  "homepage": "https://github.com/neerajmg/Product-Review-Extractor#readme"
 }

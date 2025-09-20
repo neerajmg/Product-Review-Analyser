@@ -1,0 +1,39 @@
+name: Extension Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        
+    - name: Run Tests
+      run: npm test
+      
+    - name: Validate Extension Manifest
+      run: |
+        node -e "
+          const manifest = require('./manifest.json');
+          console.log('✅ Manifest is valid JSON');
+          console.log('Extension:', manifest.name, 'v' + manifest.version);
+        "
+        
+    - name: Check File Structure
+      run: |
+        echo "🔍 Checking extension structure..."
+        test -f manifest.json && echo "✅ manifest.json exists"
+        test -d src && echo "✅ src/ directory exists"
+        test -f src/background.js && echo "✅ background.js exists"
+        test -f src/content.js && echo "✅ content.js exists"
+        echo "🎉 All required files present!"

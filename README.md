@@ -1,6 +1,25 @@
-# 🛍️ Universal Product Review Analyzer
+# 🛍️ Universal E-commerce Review Analyzer
 
-**A powerful Chrome extension that analyzes product reviews on ANY e-commerce website and provides AI-powere## 🚀 Advanced Features
+[![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white)](https://chrome.google.com/webstore)
+[![MIT License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
+[![JavaScript](https://img.shields.io/badge/JavaScript-ES6+-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
+[![AI Powered](https://img.shields.io/badge/AI-Powered-FF6B6B?style=for-the-badge&logo=openai&logoColor=white)](https://openai.com)
+
+**A powerful Chrome extension that analyzes product reviews on ANY e-commerce website and provides AI-powered pros/cons summaries**
+
+Transform your online shopping experience with instant, unbiased insights from thousands of reviews across 25+ e-commerce platforms.
+
+---
+
+## ⭐ Why Choose This Extension?
+
+- 🌍 **Universal Compatibility** - Works on ANY e-commerce site, not just Amazon
+- 🤖 **Multi-AI Support** - Choose from OpenAI, Anthropic, or Google models
+- 🔒 **Privacy First** - Your data stays local, no tracking
+- ⚡ **Instant Analysis** - Get insights in seconds, not minutes
+- 🎯 **Smart Detection** - Automatically finds reviews on any layout
+
+## 🚀 Advanced Features
 
 ### Multi-page Analysis
 
@@ -75,15 +94,14 @@ src/
 We welcome contributions! The extension is designed to be easily extensible:
 
 1. **Adding new sites**: Update `site_database.js` with new selectors
-2. **Improving detection**: Enhance `universal_extractor.js` algorithms  
+2. **Improving detection**: Enhance `universal_extractor.js` algorithms
 3. **AI providers**: Add support in `ai_client.js`
 4. **Testing**: Add test cases in `test_cases.js`h structured pros and cons.**
-
-![Extension Demo](image/README/1758327426673.png)
 
 ## 🌟 Key Features
 
 ### 🌍 **Universal E-commerce Support**
+
 Works on **25+ major e-commerce platforms** plus any generic review site:
 
 - **🏪 Marketplaces**: Amazon, eBay, Etsy, AliExpress, Flipkart
@@ -94,12 +112,14 @@ Works on **25+ major e-commerce platforms** plus any generic review site:
 - **🔄 Generic**: Automatically detects and works on any e-commerce site
 
 ### 🧠 **AI-Powered Analysis**
+
 - **Multi-provider AI support**: OpenAI GPT-4, Anthropic Claude, Google Gemini
 - **Intelligent review extraction** using advanced heuristics and content analysis
 - **Smart rating detection** from stars, text, and visual elements
 - **Structured data parsing** (JSON-LD, microdata) for maximum accuracy
 
 ### 🎯 **Advanced Detection System**
+
 - **Automatic site recognition** - No configuration needed
 - **Site-specific optimizations** for major platforms
 - **Universal fallback patterns** that work on unknown sites
@@ -108,15 +128,16 @@ Works on **25+ major e-commerce platforms** plus any generic review site:
 ## 🚀 Quick Start
 
 1. **Install the Extension**
+
    - Load unpacked from `chrome://extensions/`
    - Enable "Developer mode" and click "Load unpacked"
-
 2. **Configure AI Provider** (Optional)
+
    - Click the extension icon → Settings
    - Choose your preferred AI provider (OpenAI, Anthropic, or Gemini)
    - Add your API key for enhanced analysis
-
 3. **Analyze Reviews**
+
    - Visit any e-commerce product page
    - Click the extension icon
    - Click "Analyze Reviews"
@@ -129,7 +150,7 @@ Works on **25+ major e-commerce platforms** plus any generic review site:
 ### Core Components
 
 - **🔍 UniversalReviewExtractor**: AI-powered review detection system
-- **📊 SiteDatabase**: Comprehensive database of 25+ e-commerce sites  
+- **📊 SiteDatabase**: Comprehensive database of 25+ e-commerce sites
 - **🤖 Multi-provider AI Client**: Unified interface for OpenAI, Anthropic, Gemini
 - **🎯 Smart Selectors**: Site-specific CSS selectors with intelligent fallbacks
 - **🧪 Testing Suite**: Comprehensive validation and debugging tools
@@ -150,7 +171,7 @@ The extension supports multiple AI providers for enhanced analysis:
 ### Supported Providers
 
 1. **OpenAI GPT-4** - High-quality analysis with excellent reasoning
-2. **Anthropic Claude** - Detailed analysis with safety focus  
+2. **Anthropic Claude** - Detailed analysis with safety focus
 3. **Google Gemini** - Fast and efficient processing
 4. **Local Fallback** - Works offline with deterministic analysis
 
@@ -172,7 +193,7 @@ The extension supports multiple AI providers for enhanced analysis:
 1. **🎯 Site Recognition**: Automatically detects the e-commerce platform
 2. **📦 Review Discovery**: Uses multiple methods to find review containers:
    - Site-specific CSS selectors for known platforms
-   - Structured data parsing (JSON-LD, microdata)  
+   - Structured data parsing (JSON-LD, microdata)
    - AI-powered content analysis for unknown sites
 3. **📝 Text Extraction**: Intelligently extracts review text while filtering noise
 4. **⭐ Rating Extraction**: Detects ratings from various formats (stars, numbers, text)
@@ -206,7 +227,7 @@ UniversalTestCases.runAllTests();
 Add `?debug=true` to any URL to see detailed extraction analysis:
 
 - Site detection results
-- Review container discovery process  
+- Review container discovery process
 - Text extraction statistics
 - Performance metrics
 
