@@ -343,6 +343,96 @@ function removeResultsOverlay(){
   resultsOverlay = null;
 }
 function escHandler(e){ if (e.key === 'Escape') { removeResultsOverlay(); } }
+
+// Extract overall product rating from the page
+function extractOverallRating() {
+  // Common product rating selectors across e-commerce sites
+  const ratingSelectors = [
+    // Amazon
+    '.a-icon-alt[title*="out of"], .a-icon-alt[title*="stars"]',
+    'span.a-icon-alt:contains("out of")',
+    '[data-hook="rating-out-of-text"]',
+    '.a-size-medium.a-color-base:contains("out of")',
+    
+    // Flipkart
+    '.XQDdHH', '._3LWZlK', '.hGSR34', '._3n8uyp',
+    'div:contains("★") span', 'div:contains("⭐") span',
+    
+    // eBay
+    '.notranslate[title*="out of"]', '.reviews .star-rating',
+    
+    // Generic patterns
+    '[class*="rating"]:contains("out of")',
+    '[class*="star"]:contains("out of")',
+    '[aria-label*="star"]', '[title*="star"]',
+    'span:contains("★")', 'span:contains("⭐")',
+    '[class*="rating"][class*="average"]',
+    '[data-testid*="rating"]', '[data-cy*="rating"]'
+  ];
+
+  for (const selector of ratingSelectors) {
+    try {
+      const elements = document.querySelectorAll(selector);
+      for (const element of elements) {
+        const text = element.textContent || element.title || element.getAttribute('aria-label') || '';
+        
+        // Parse different rating formats
+        let rating = null;
+        
+        // Format: "4.2 out of 5 stars"
+        const outOfMatch = text.match(/(\d+\.?\d*)\s*out\s*of\s*(\d+)/i);
+        if (outOfMatch) {
+          rating = parseFloat(outOfMatch[1]);
+          const maxRating = parseInt(outOfMatch[2]);
+          if (rating && maxRating === 5) return rating;
+        }
+        
+        // Format: "4.2 stars", "4.2★", "★★★★☆"
+        const starMatch = text.match(/(\d+\.?\d*)\s*(?:stars?|★|⭐)/i);
+        if (starMatch) {
+          rating = parseFloat(starMatch[1]);
+          if (rating && rating <= 5) return rating;
+        }
+        
+        // Count filled stars: ★★★★☆
+        const filledStars = (text.match(/★|⭐/g) || []).length;
+        const emptyStars = (text.match(/☆/g) || []).length;
+        if (filledStars > 0 && (filledStars + emptyStars) === 5) {
+          return filledStars;
+        }
+        
+        // Numeric rating patterns (like "4.2")
+        const numericMatch = text.match(/^(\d+\.?\d*)$/);
+        if (numericMatch) {
+          rating = parseFloat(numericMatch[1]);
+          if (rating && rating <= 5) return rating;
+        }
+      }
+    } catch (e) {
+      console.log('Rating extraction error:', e);
+    }
+  }
+  
+  return null;
+}
+
+// Format rating display with stars
+function formatRatingDisplay(rating) {
+  if (!rating) return '';
+  
+  const fullStars = Math.floor(rating);
+  const hasHalfStar = rating - fullStars >= 0.5;
+  const emptyStars = 5 - fullStars - (hasHalfStar ? 1 : 0);
+  
+  let display = '';
+  display += '★'.repeat(fullStars);
+  if (hasHalfStar) display += '☆';
+  display += '☆'.repeat(emptyStars);
+  display += ` ${rating}/5`;
+  
+  return display;
+}
+
 function showResultsOverlay(summary, reason) {
   if (resultsOverlay) removeResultsOverlay();
   try { ensureBaseStyles(); } catch(_) {}
@@ -353,10 +443,16 @@ function showResultsOverlay(summary, reason) {
     return arr.map(p => `<li class='${cls}'>${escapeHtml(p.label)} <span style='opacity:.7'>(x${p.support_count})</span></li>`).join('');
   }
   const jsonStr = JSON.stringify(summary, null, 2);
+  
+  // Extract and format overall rating
+  const overallRating = extractOverallRating();
+  const ratingDisplay = overallRating ? formatRatingDisplay(overallRating) : '';
+  const ratingHtml = ratingDisplay ? `<div style="font-size:16px; color:#ff6b35; margin-bottom:16px; font-weight:bold;">${escapeHtml(ratingDisplay)}</div>` : '';
+  
   resultsOverlay.innerHTML = `
     <div class="ppc-panel">
+      ${ratingHtml}
       <h2 style="margin-top:0;">Pros & Cons Summary</h2>
-      <div style="font-size:12px; color:#555;">Finished: ${escapeHtml(reason||'completed')}</div>
       <div class="ppc-flex" style="margin-top:12px;">
         <div style="flex:1; min-width:300px;">
           <h3>Pros</h3>
@@ -370,8 +466,6 @@ function showResultsOverlay(summary, reason) {
       <div style="margin-top:16px; display:flex; gap:8px; flex-wrap:wrap;">
         <button class="ppc-btn" id="ppc_copy_json">Copy JSON</button>
         <button class="ppc-btn" id="ppc_copy_text" style="background:#059669;">Copy Plain</button>
-        <button class="ppc-btn" id="ppc_refresh_sum" style="background:#6d28d9;">Refresh</button>
-        <button class="ppc-btn" id="ppc_undo_sum" style="background:#92400e;">Undo</button>
         <button class="ppc-btn" id="ppc_close_results" style="background:#555;">Close</button>
       </div>
       <pre style="margin-top:16px; max-height:240px; overflow:auto; font-size:11px; background:#f8f8f8; padding:8px;">${escapeHtml(jsonStr)}</pre>
@@ -391,12 +485,6 @@ function showResultsOverlay(summary, reason) {
   resultsOverlay.querySelector('#ppc_copy_text').addEventListener('click', () => {
     const plain = 'PROS:\n' + pros.map(p=>`- ${p.label} (x${p.support_count})`).join('\n') + '\n\nCONS:\n' + cons.map(c=>`- ${c.label} (x${c.support_count})`).join('\n');
     navigator.clipboard.writeText(plain);
-  });
-  resultsOverlay.querySelector('#ppc_refresh_sum').addEventListener('click', () => {
-        safeSendMessage({ type: 'PPC_REFRESH_CRAWL_SUMMARY' });
-  });
-  resultsOverlay.querySelector('#ppc_undo_sum').addEventListener('click', () => {
-    safeSendMessage({ type: 'PPC_UNDO_SUMMARY' });
   });
 }
 

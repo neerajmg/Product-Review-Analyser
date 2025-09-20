@@ -641,11 +641,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           runDeepCrawlLoop(sender.tab.id);
           sendResponse({ ok: true });
         }
-      } else if (msg.type === 'PPC_REFRESH_CRAWL_SUMMARY') {
-        const state = await getCrawlState();
-        if (!state) return sendResponse({ ok:false, error:'No crawl state' });
-        await finalizeCrawl(state.finishedReason || 'completed', true);
-        sendResponse({ ok: true, refreshed: true });
       } else if (msg.type === 'PPC_CANCEL_CRAWL') {
         const state = await getCrawlState();
         if (state && !state.finished) {
@@ -665,14 +660,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // Mark as finished and summarize current aggregation.
         await finalizeCrawl('manual-stop');
         sendResponse({ ok:true, stopped:true });
-      } else if (msg.type === 'PPC_UNDO_SUMMARY') {
-        let state = await getCrawlState();
-        if (!state || !state.previousSummary) return sendResponse({ ok:false, error:'No previous summary' });
-        // swap summaries
-        const current = state.summary;
-        state = await updateCrawlState({ summary: state.previousSummary, previousSummary: current });
-        notifyActiveTab({ type: 'PPC_CRAWL_FINISHED', sessionId: state.sessionId, summary: state.summary, reason: state.finishedReason + ' (undo)' });
-        sendResponse({ ok:true, undone:true });
       } else if (msg.type === 'PPC_SAVE_OPTIONS') {
         await saveOptions(msg.payload);
         sendResponse({ ok: true });

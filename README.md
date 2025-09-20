@@ -105,7 +105,7 @@ We welcome contributions! The extension is designed to be easily extensible:
 Works on **25+ major e-commerce platforms** plus any generic review site:
 
 - **🏪 Marketplaces**: Amazon, eBay, Etsy, AliExpress, Flipkart
-- **🛒 Major Retailers**: Walmart, Target, Best Buy, Home Depot, Lowe's, Newegg
+- **🛒 Major Retailers**: Walmart, Target, Best Buy, Home epot, Lowe's, Newegg
 - **👗 Fashion**: Zara, H&M, Myntra
 - **💄 Beauty**: Sephora, Ulta, Nykaa
 - **🏠 Specialized**: Wayfair, Overstock, Shopify stores
