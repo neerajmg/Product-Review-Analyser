@@ -62,34 +62,52 @@ function setBtnState(loading = false, text = 'Analyze Reviews') {
 
 // Update API key status message based on key health
 function updateApiKeyStatus(keyHealth) {
+  console.log('PPC: updateApiKeyStatus called with:', keyHealth);
+  
+  if (!apiKeyHelp || !statusMessage) {
+    console.error('PPC: Required elements not found', { apiKeyHelp: !!apiKeyHelp, statusMessage: !!statusMessage });
+    return;
+  }
+  
   if (!keyHealth) {
     // No key health data - show warning
     apiKeyHelp.className = 'ai-status warning';
     statusMessage.textContent = '⚠️ Please provide your AI service API keys in Settings for the extension to work perfectly';
+    console.log('PPC: Set status to warning (no key health)');
     return;
   }
 
   if (keyHealth.status === 'valid') {
     apiKeyHelp.className = 'ai-status success';
     statusMessage.textContent = '✅ API key configured and ready';
+    console.log('PPC: Set status to success (valid key)');
   } else if (keyHealth.status === 'missing') {
     apiKeyHelp.className = 'ai-status warning';
     statusMessage.textContent = '⚠️ Please provide your AI service API keys in Settings for the extension to work perfectly';
+    console.log('PPC: Set status to warning (missing key)');
   } else if (keyHealth.status === 'invalid') {
     apiKeyHelp.className = 'ai-status error';
     statusMessage.textContent = '❌ Invalid API key - please check your settings';
+    console.log('PPC: Set status to error (invalid key)');
   } else if (keyHealth.status === 'quota_exhausted') {
     apiKeyHelp.className = 'ai-status error';
     statusMessage.textContent = '❌ API quota exhausted - please check your billing';
+    console.log('PPC: Set status to error (quota exhausted)');
   } else {
     apiKeyHelp.className = 'ai-status error';
     statusMessage.textContent = '❌ API error - please check your settings';
+    console.log('PPC: Set status to error (unknown status)');
   }
 }
 
 // Update rate limit indicator
 function updateRateLimitStatus(status, nextRetryAfter = null) {
-  if (!rateLimitIndicator) return;
+  console.log('PPC: updateRateLimitStatus called with:', status, nextRetryAfter);
+  
+  if (!rateLimitIndicator) {
+    console.error('PPC: rateLimitIndicator element not found');
+    return;
+  }
   
   rateLimitIndicator.className = 'rate-limit-indicator';
   
@@ -97,20 +115,24 @@ function updateRateLimitStatus(status, nextRetryAfter = null) {
     case 'available':
       rateLimitIndicator.classList.add('available');
       rateLimitIndicator.title = 'API available';
+      console.log('PPC: Set rate limit to available (green)');
       break;
     case 'rate_limited':
       rateLimitIndicator.classList.add('limited');
       rateLimitIndicator.title = nextRetryAfter ? 
         `Rate limited - retry in ${nextRetryAfter}s` : 'Rate limited';
+      console.log('PPC: Set rate limit to limited (yellow)');
       break;
     case 'quota_exceeded':
       rateLimitIndicator.classList.add('error');
       rateLimitIndicator.title = 'Quota exceeded';
+      console.log('PPC: Set rate limit to quota exceeded (red)');
       break;
     case 'error':
     default:
       rateLimitIndicator.classList.add('error');
       rateLimitIndicator.title = 'API error or no key';
+      console.log('PPC: Set rate limit to error (red)');
       break;
   }
 }
@@ -248,9 +270,33 @@ function initHealthIndicators() {
 // Initialize status indicators
 function initStatusIndicators() {
   console.log('PPC: Initializing status indicators...');
+  console.log('PPC: Elements found:', {
+    apiKeyHelp: !!apiKeyHelp,
+    statusMessage: !!statusMessage, 
+    rateLimitIndicator: !!rateLimitIndicator,
+    healthDot: !!healthDot
+  });
   
-  // Check API key health status
+  // Test the functions immediately with sample data
+  console.log('PPC: Testing status functions...');
+  updateRateLimitStatus('error'); // This should make the dot red
+  
+  // Check if chrome.runtime exists
+  if (!chrome || !chrome.runtime) {
+    console.error('PPC: Chrome runtime not available');
+    updateApiKeyStatus(null);
+    return;
+  }
+  
+  // Check API key health status with timeout
+  const healthTimeout = setTimeout(() => {
+    console.error('PPC: Health check timed out');
+    updateApiKeyStatus(null);
+    updateRateLimitStatus('error');
+  }, 5000);
+  
   chrome.runtime.sendMessage({type: 'PPC_GET_KEY_HEALTH'}, (response) => {
+    clearTimeout(healthTimeout);
     console.log('PPC: Key health response:', response);
     
     if (chrome.runtime.lastError) {
@@ -261,14 +307,17 @@ function initStatusIndicators() {
     }
     
     if (response && response.ok && response.health) {
+      console.log('PPC: Health data:', response.health);
       updateApiKeyStatus(response.health);
       
       // Update header health dot
       if (healthDot) {
         if (response.health.status === 'valid') {
           healthDot.className = 'health-indicator healthy';
+          console.log('PPC: Set health dot to healthy');
         } else {
           healthDot.className = 'health-indicator error';
+          console.log('PPC: Set health dot to error');
         }
       }
       
@@ -305,12 +354,39 @@ function checkRateLimit() {
   });
 }
 
+// Test function to verify JavaScript is working
+function testStatusUpdate() {
+  console.log('PPC: Testing manual status update...');
+  if (statusMessage) {
+    statusMessage.textContent = '🔧 JavaScript is working! Testing...';
+    statusMessage.style.color = 'blue';
+  }
+  if (rateLimitIndicator) {
+    rateLimitIndicator.style.background = 'blue';
+  }
+  
+  // Reset after 2 seconds
+  setTimeout(() => {
+    if (statusMessage) {
+      statusMessage.textContent = '⚠️ Please provide your AI service API keys in Settings for the extension to work perfectly';
+      statusMessage.style.color = '';
+    }
+    initStatusIndicators();
+  }, 2000);
+}
+
 // Initialize popup on load
 document.addEventListener('DOMContentLoaded', () => {
-  console.log('PPC: POPUP LOADED');
+  console.log('PPC: POPUP LOADED - DOM READY');
   
-  // Initialize status indicators
-  initStatusIndicators();
+  // Test that we can modify elements immediately
+  testStatusUpdate();
+  
+  // Initialize status indicators after a short delay
+  setTimeout(() => {
+    console.log('PPC: Starting status initialization...');
+    initStatusIndicators();
+  }, 100);
   
   // Refresh rate limit status every 15 seconds (less frequent to avoid spam)
   setInterval(() => {
