@@ -219,7 +219,7 @@ function ensureProgressOverlay() {
     <div class="ppc-panel" style="max-width:420px;">
       <h3 style="margin-top:0;">Deep Crawl Progress</h3>
       <div id="ppc_prog_status">Starting…</div>
-      <div style="margin-top:8px; font-size:12px;" id="ppc_prog_details"></div>
+      <div style="margin-top:8px; font-size:12px;" id="ppc_prog_details" aria-live="polite"></div>
       <div style="margin-top:12px; display:flex; gap:8px;">
         <button class="ppc-btn" id="ppc_cancel_crawl" style="background:#7f1d1d;">Cancel</button>
         <button class="ppc-btn" id="ppc_stop_and_summarize" style="background:#6d28d9;">Stop & Summarize Now</button>
@@ -234,15 +234,27 @@ function ensureProgressOverlay() {
   });
   progressEl.querySelector('#ppc_stop_and_summarize').addEventListener('click', () => {
     // Keep overlay; background will respond with finished message which replaces overlay with results
+    const stopBtn = progressEl.querySelector('#ppc_stop_and_summarize');
+    if (stopBtn.disabled) return; // prevent duplicate
+    stopBtn.disabled = true;
+    stopBtn.textContent = 'Summarizing…';
     safeSendMessage({ type: 'PPC_STOP_AND_SUMMARIZE' });
-    progressEl.querySelector('#ppc_prog_status').textContent = 'Stopping & summarizing…';
+    const statusEl = progressEl.querySelector('#ppc_prog_status');
+    if (statusEl) statusEl.textContent = 'Stopping & summarizing…';
   });
   return progressEl;
 }
 function updateProgressOverlay(msg) {
   const el = ensureProgressOverlay();
-  el.querySelector('#ppc_prog_status').textContent = msg.status || 'Working…';
-  el.querySelector('#ppc_prog_details').textContent = `Pages: ${msg.pagesCrawled}/${msg.maxPages} (session ${msg.sessionId || ''})`;
+  const statusEl = el.querySelector('#ppc_prog_status');
+  if (statusEl) statusEl.textContent = msg.status || 'Working…';
+  const pct = (msg.maxPages && msg.maxPages > 0)
+    ? Math.min(100, (msg.pagesCrawled / msg.maxPages) * 100)
+    : 0;
+  const detailsEl = el.querySelector('#ppc_prog_details');
+  if (detailsEl) {
+    detailsEl.textContent = `${pct.toFixed(1)}% completed`;
+  }
 }
 function removeProgressOverlay() { if (progressEl) { progressEl.remove(); progressEl=null; } }
 
