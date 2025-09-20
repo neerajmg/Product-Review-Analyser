@@ -8,6 +8,8 @@
  * Scaffold version: Deep crawl modal & navigation implemented in later commits.
  */
 
+console.log('PPC_DEBUG: Content script loaded on:', window.location.hostname);
+
 // UMD-style access to selectors
 // (selectors.js will attach window.PPCSelectors)
 
@@ -42,42 +44,52 @@ function findNextPageUrl() {
 
 /** Async extract (wait briefly for selectors.js if not yet attached) */
 async function extractReviewsOnPageAsync() {
-  if (!window.PPCSelectors) {
-    // Load once per page if missing
-    if (!window.__ppcSelectorsLoadPromise) {
-      window.__ppcSelectorsLoadPromise = new Promise(res => {
-        try {
-          const script = document.createElement('script');
-          script.src = chrome.runtime.getURL('src/selectors.js');
-          script.onload = () => { res(true); script.remove(); };
-          script.onerror = () => { res(false); };
-          document.documentElement.appendChild(script);
-        } catch(_) { res(false); }
-        // Safety timeout (500ms)
-        setTimeout(()=>res(!!window.PPCSelectors), 500);
-      });
-    }
-    await window.__ppcSelectorsLoadPromise;
-  }
+  console.log('PPC_DEBUG: extractReviewsOnPageAsync called, PPCSelectors available:', !!window.PPCSelectors);
+  
+  // Since selectors.js is loaded as a content script, it should be available immediately
   const selectors = window.PPCSelectors;
   if (!selectors) {
-    // Still not available – fallback quietly (no noisy console spam every request)
+    console.log('PPC_DEBUG: PPCSelectors not available, using heuristic fallback');
     return heuristicFallbackExtract();
   }
-  const arr = selectors.findReviewElements(document).map(el => ({
-    id: el.getAttribute('id') || el.getAttribute('data-hook') || ('r' + Math.random().toString(36).slice(2, 9)),
-    text: selectors.extractReviewText(el),
-    rating: selectors.extractRating(el)
-  }));
+  // Add debugging for review extraction
+  console.log('PPC_DEBUG: Starting review extraction on:', window.location.hostname);
+  
+  const reviewElements = selectors.findReviewElements(document);
+  console.log('PPC_DEBUG: Found review elements:', reviewElements.length);
+  
+  const arr = reviewElements.map((el, index) => {
+    const id = el.getAttribute('id') || el.getAttribute('data-hook') || el.getAttribute('data-testid') || ('r' + Math.random().toString(36).slice(2, 9));
+    const text = selectors.extractReviewText(el, document);
+    const rating = selectors.extractRating(el, document);
+    
+    console.log(`PPC_DEBUG: Review ${index + 1}:`, {
+      id,
+      textLength: text?.length || 0,
+      textPreview: text?.substring(0, 100) + '...',
+      rating,
+      elementTag: el.tagName,
+      elementClass: el.className
+    });
+    
+    return { id, text, rating };
+  });
+  
+  console.log('PPC_DEBUG: Extracted reviews:', arr.length, 'with valid text:', arr.filter(r => r.text && r.text.length > 10).length);
+  
   if (!arr.length) return heuristicFallbackExtract();
   return arr;
 }
 
 // Heuristic fallback for Amazon (and generic) if structured selectors absent
 function heuristicFallbackExtract() {
+  console.log('PPC_DEBUG: Using heuristic fallback extraction...');
   const results = [];
+  
   // Main Amazon review blocks on review listing pages
   const blocks = document.querySelectorAll('div[data-hook="review"]');
+  console.log('PPC_DEBUG: Found Amazon review blocks:', blocks.length);
+  
   blocks.forEach(block => {
     const body = block.querySelector('[data-hook="review-body"]');
     const ratingEl = block.querySelector('[data-hook*="review-star-rating"], i.a-icon-star span');
@@ -89,14 +101,60 @@ function heuristicFallbackExtract() {
     const text = (body && body.textContent.trim()) || '';
     if (text) results.push({ id: block.getAttribute('id') || ('r' + Math.random().toString(36).slice(2,9)), text, rating });
   });
+  
   // Snippets on product detail page (top few preview reviews)
   if (!results.length) {
+    console.log('PPC_DEBUG: No Amazon blocks found, trying preview reviews...');
     const preview = document.querySelectorAll('#customerReviews div.review, div[data-hook="review-collapsed"]');
+    console.log('PPC_DEBUG: Found preview blocks:', preview.length);
+    
     preview.forEach(p => {
       const t = p.textContent.trim();
       if (t) results.push({ id: 'snip_' + Math.random().toString(36).slice(2,9), text: t, rating: null });
     });
   }
+  
+  // Generic fallback for any site (including Flipkart)
+  if (!results.length) {
+    console.log('PPC_DEBUG: No Amazon/preview found, trying generic patterns...');
+    
+    // Look for any elements that might contain reviews
+    const genericBlocks = document.querySelectorAll([
+      '.review', '.review-item', '.customer-review', '.user-review',
+      '[class*="review"]', '[data-testid*="review"]',
+      '._1AtVbE', '._27M-vq', '.col-12-12', '.cPHDOP'  // Flipkart specific
+    ].join(','));
+    
+    console.log('PPC_DEBUG: Found generic review blocks:', genericBlocks.length);
+    
+    genericBlocks.forEach((block, index) => {
+      const text = block.textContent.trim();
+      // Look for text that seems like a review (has some length and common review words)
+      if (text.length > 20 && text.length < 3000 && 
+          (text.includes('good') || text.includes('bad') || text.includes('quality') || 
+           text.includes('product') || text.includes('★') || text.includes('star'))) {
+        
+        // Try to extract rating
+        let rating = null;
+        const ratingMatch = text.match(/(\d)\s*[★⭐]/);
+        if (ratingMatch) rating = parseInt(ratingMatch[1]);
+        
+        results.push({ 
+          id: 'generic_' + index,
+          text: text.slice(0, 2000), // Cap length
+          rating 
+        });
+        
+        console.log(`PPC_DEBUG: Generic review ${index + 1}:`, {
+          textLength: text.length,
+          textPreview: text.substring(0, 100) + '...',
+          rating
+        });
+      }
+    });
+  }
+  
+  console.log('PPC_DEBUG: Heuristic fallback found:', results.length, 'reviews');
   return results;
 }
 
@@ -120,15 +178,22 @@ function ensureBaseStyles(){
 // Listener for background or popup requests
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'PPC_EXTRACT_PAGE') {
+    console.log('PPC_DEBUG: Content script received PPC_EXTRACT_PAGE message');
     (async () => {
       try {
+        console.log('PPC_DEBUG: Starting page extraction process...');
         const meta = detectCaptchaOrBlock();
+        console.log('PPC_DEBUG: Captcha/block detection:', meta);
+        
         const reviews = await extractReviewsOnPageAsync();
+        console.log('PPC_DEBUG: Extracted reviews:', reviews?.length || 0);
+        
         const nextPageUrl = findNextPageUrl();
         console.log('PPC: PAGE-EXTRACT reviews=', reviews.length, 'next=', !!nextPageUrl, meta);
         sendResponse({ reviews, nextPageUrl, ...meta });
       } catch (e) {
         console.error('PPC: CONTENT-ERR', e);
+        console.log('PPC_DEBUG: Content script error details:', e.stack);
         sendResponse({ reviews: [], nextPageUrl: null, error: e.message });
       }
     })();

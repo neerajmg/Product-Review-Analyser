@@ -6,7 +6,6 @@ This repository contains a Chrome extension that:
 - Produces an unbiased pros/cons summary (Gemini + deterministic fallback)
 - Performs a safe, consent-gated deep crawl (foreground, resumable)
 
-
 ## Current Status (Scaffold)
 
 Implemented:
@@ -57,13 +56,13 @@ The extension periodically re-checks the key (every ~6 hours) and before making 
 4. Complete the consent modal; crawl will aggregate up to 30 pages or stop earlier when pages end.
 5. View pros/cons overlay. If no API key is set, local fallback summarizer is used.
 
-## Testing
+### Safety Notes
 
-See `tests/basic_extract_test.js` for a simple selector test harness scaffold.
+- Frequent commits aid traceability and make rolling back trivial.
+- For large refactors, you can request a temporary "work-in-progress" branch; we then squash before merging.
+- Force pushes are reserved for: (1) explicit squash request, (2) removing sensitive data accidentally committed.
 
-## Contributing / Next Steps
-
-After you confirm, deeper functionality (deep crawl & Gemini integration) will be implemented as small, reviewable commits.
+If you want a different cadence (e.g., only after passing tests), let me know and I'll adjust the workflow or add a pre-commit test gate.
 
 ## Disclaimer
 

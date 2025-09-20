@@ -3,6 +3,7 @@
  * Restored after refactor: constants & utility functions + Gemini integration.
  */
 
+import { generateSummary, validateKey, PROVIDERS } from './lib/ai_client.js';
 import { validateAgainstSchema, coerceAndClean, extractFirstJsonBlock, sampleReviewsForPrompt, mockRewriteWithGemini, localFallback, heuristicAspectSummary } from './lib/summary_utils.js';
 
 // =============================
@@ -58,6 +59,7 @@ function loadOptions() {
       resolve(Object.assign({
         fallbackMode: true,
         apiKey: '',
+        aiProvider: 'gemini',
         maxPagesCap: DEFAULT_MAX_PAGES_CAP,
         maxReviewCount: DEFAULT_MAX_REVIEW_COUNT
       }, data[STORAGE_KEYS.OPTIONS] || {}));
@@ -144,7 +146,30 @@ async function rewriteWithGemini(reviews, site='') {
     return heuristicAspectSummary(reviews);
   }
   try {
-    return await realRewriteWithGemini(reviews, site);
+    const sampled = sampleReviewsForPrompt(reviews);
+    const schemaDescription = `{
+  "pros": [ { "label": string, "support_count": number, "example_ids": [string] } ],
+  "cons": [ { "label": string, "support_count": number, "example_ids": [string] } ],
+  "note_pros": string,
+  "note_cons": string
+}`;
+    const systemPrompt = `You are an assistant that extracts product ASPECTS from user reviews and produces ONLY JSON (no markdown). Each aspect label must be a concise noun phrase (e.g. "battery life", "build quality", "noise level", "customer support"). Do NOT use placeholders like 'product', 'name', 'brand', 'redacted'. Merge duplicates. Limit to top 8 pros and 8 cons.`;
+    const userPrompt = `SOURCE SITE: ${site || 'unknown'}\nTASK: From the provided review objects, create summarised pros and cons focusing on tangible aspects or experience qualities. Decide whether an aspect is a pro or a con based on sentiment (ratings & wording). If both positive and negative feedback exist for an aspect, place it where the majority sentiment lies (break ties by rating average).\nRULES:\n- support_count is how many DISTINCT reviews (by id) back that aspect\n- example_ids: up to 3 representative review ids that mention it\n- Exclude overly generic tokens (product, item, purchase, amazon, delivery) unless directly critiqued (e.g. 'delivery delay')\n- Prefer multi-word phrases over single adjectives\n- NEVER fabricate aspects not found in text\n- If no pros or cons, return empty arrays and notes explaining absence.\nSCHEMA: ${schemaDescription}\nINPUT_REVIEWS_JSON: ${JSON.stringify({ reviews: sampled })}\nReturn ONLY raw JSON.`;
+
+    const fullPrompt = `${systemPrompt}\n\n${userPrompt}`;
+    const summaryJson = await generateSummary(opts.aiProvider || 'gemini', opts.apiKey, fullPrompt);
+    if (!summaryJson) {
+        throw new Error("Received empty response from Gemini");
+    }
+    console.log('PPC_DEBUG: Raw AI response:', summaryJson);
+    const parsed = JSON.parse(summaryJson);
+    console.log('PPC_DEBUG: Parsed JSON:', parsed);
+    if (!validateAgainstSchema(parsed)) {
+        console.error('PPC_DEBUG: Schema validation failed. Expected keys:', ['pros', 'cons', 'note_pros', 'note_cons']);
+        console.error('PPC_DEBUG: Actual object keys:', Object.keys(parsed));
+        throw new Error("Gemini response failed schema validation");
+    }
+    return coerceAndClean(parsed);
   } catch (e) {
     console.warn('PPC: GEMINI real failed, falling back', e.message);
     return heuristicAspectSummary(reviews);
@@ -458,25 +483,30 @@ async function runDeepCrawlLoop(tabId) {
 // API Key Validation & Health Monitoring
 // =============================
 /**
- * Validate Gemini API key by calling lightweight models list (pageSize=1) endpoint.
+ * Validate API key for the specified provider
+ * @param {string} provider
  * @param {string} apiKey
  * @returns {Promise<{status:string,message:string,checkedAt:number}>>}
  */
-async function validateApiKey(apiKey) {
+async function validateApiKey(provider, apiKey) {
   if (!apiKey) return { status: 'missing', message: 'No key saved', checkedAt: Date.now() };
+  if (!provider) provider = 'gemini'; // fallback
+  
   try {
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1&key=' + encodeURIComponent(apiKey);
-    const resp = await fetch(url, { method: 'GET' });
-    if (resp.ok) {
-      return { status: 'valid', message: 'Key validated', checkedAt: Date.now() };
+    const result = await validateKey(provider, apiKey);
+    const checkedAt = Date.now();
+    
+    switch (result) {
+      case 'VALID':
+        return { status: 'valid', message: `${provider} key validated`, checkedAt };
+      case 'INVALID':
+        return { status: 'invalid', message: 'Invalid or expired key', checkedAt };
+      case 'QUOTA_EXHAUSTED':
+        return { status: 'quota_exhausted', message: 'Quota / credits exhausted', checkedAt };
+      case 'ERROR':
+      default:
+        return { status: 'error', message: `API error with ${provider}`, checkedAt };
     }
-    let errJson = null;
-    try { errJson = await resp.json(); } catch(_) {}
-    const code = errJson?.error?.code;
-    const status = errJson?.error?.status || '';
-    if (status === 'RESOURCE_EXHAUSTED') return { status: 'quota_exhausted', message: 'Quota / credits exhausted', checkedAt: Date.now() };
-    if (status === 'UNAUTHENTICATED' || status === 'PERMISSION_DENIED') return { status: 'invalid', message: 'Invalid or expired key', checkedAt: Date.now() };
-    return { status: 'error', message: 'API error ' + (status || code || resp.status), checkedAt: Date.now() };
   } catch (e) {
     return { status: 'network_error', message: e.message, checkedAt: Date.now() };
   }
@@ -488,7 +518,7 @@ async function updateKeyHealthAndNotify(trigger) {
     const h = { status: 'missing', message: 'No key saved', checkedAt: Date.now(), trigger };
     await setKeyHealth(h); return h;
   }
-  const h = await validateApiKey(opts.apiKey);
+  const h = await validateApiKey(opts.aiProvider || 'gemini', opts.apiKey);
   h.trigger = trigger;
   await setKeyHealth(h);
   if (['invalid','quota_exhausted','error'].includes(h.status)) {
@@ -655,7 +685,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok:false, message:'Key looks too short or missing.' });
           return;
         }
-        const result = await validateApiKey(key.trim());
+        const opts = await loadOptions();
+        const result = await validateApiKey(opts.aiProvider || 'gemini', key.trim());
         await setKeyHealth(result);
         sendResponse({ ok: result.status === 'valid', health: result, message: result.message });
       } else if (msg.type === 'PPC_GET_KEY_HEALTH') {
@@ -664,6 +695,48 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       } else if (msg.type === 'PPC_FORCE_KEY_RECHECK') {
         const h = await updateKeyHealthAndNotify('manual');
         sendResponse({ ok:true, health: h });
+      } else if (msg.type === 'PPC_CLEAR_CACHE') {
+        await setCache({});
+        console.log('PPC: Cache cleared by user.');
+        sendResponse({ ok: true });
+      } else if (msg.type === 'PPC_CHECK_RATE_LIMIT') {
+        const opts = await loadOptions();
+        if (!opts.apiKey) {
+          sendResponse({ ok: false, error: 'No API key configured' });
+          return;
+        }
+        
+        try {
+          const provider = opts.aiProvider || 'gemini';
+          const result = await validateKey(provider, opts.apiKey);
+          let status = 'available';
+          let nextRetryAfter = null;
+          
+          if (result === 'QUOTA_EXHAUSTED') {
+            status = 'quota_exceeded';
+          } else if (result === 'INVALID') {
+            status = 'error';
+          } else if (result === 'ERROR') {
+            // Could be rate limiting, check if we're within rate limit window
+            const timeSinceLastRequest = Date.now() - lastGeminiRequestTs;
+            if (timeSinceLastRequest < GEMINI_RATE_LIMIT_MS) {
+              status = 'rate_limited';
+              nextRetryAfter = Math.ceil((GEMINI_RATE_LIMIT_MS - timeSinceLastRequest) / 1000);
+            } else {
+              status = 'error';
+            }
+          }
+          
+          sendResponse({ 
+            ok: true, 
+            status, 
+            nextRetryAfter,
+            lastRequestTime: lastGeminiRequestTs,
+            rateLimitMs: GEMINI_RATE_LIMIT_MS
+          });
+        } catch (e) {
+          sendResponse({ ok: false, error: e.message });
+        }
       }
     } catch (e) {
       console.error('PPC: BG-ERR', e);

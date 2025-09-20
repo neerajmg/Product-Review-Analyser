@@ -56,7 +56,7 @@ No trailing periods on the subject line.
 ## Versioning
 
 Semantic versioning intent (manually managed for now):
- 
+
 - PATCH: internal fixes, no new features.
 - MINOR: new backwards-compatible features.
 - MAJOR: breaking changes (not expected early on).
@@ -72,7 +72,7 @@ git push origin v0.1.0
 
 1. Commit locally every small logical change.
 2. Run quick manual smoke (extension reload + analyze test page).
-1. Push at least every few commits or before context switching:
+3. Push at least every few commits or before context switching:
 
 ```bash
 git push origin <branch>
@@ -82,12 +82,12 @@ git push origin <branch>
 
 ## Rollback / Recovery
 
-| Scenario | Command |
-|----------|---------|
-| Undo last unpushed commit (keep changes) | `git reset --soft HEAD~1` |
-| Undo last unpushed commit (discard) | `git reset --hard HEAD~1` |
-| Revert a pushed commit | `git revert <commit-hash>` |
-| Create a safety branch before rewriting | `git branch backup/<date>` |
+| Scenario                                 | Command                      |
+| ---------------------------------------- | ---------------------------- |
+| Undo last unpushed commit (keep changes) | `git reset --soft HEAD~1`  |
+| Undo last unpushed commit (discard)      | `git reset --hard HEAD~1`  |
+| Revert a pushed commit                   | `git revert <commit-hash>` |
+| Create a safety branch before rewriting  | `git branch backup/<date>` |
 
 Never force-push to `main` unless absolutely necessary (and only after making a backup branch).
 
@@ -96,7 +96,7 @@ Never force-push to `main` unless absolutely necessary (and only after making a 
 1. `git pull --ff-only` (stay up to date)
 2. Implement small change
 3. `git add -p` (stage only what belongs)
-4. `git commit -m "feat: ..."`
+4. ` git commit -m "feat: ..."`
 5. Test: reload extension & quick functional check
 6. `git push`
 7. Repeat
@@ -114,4 +114,5 @@ Never force-push to `main` unless absolutely necessary (and only after making a 
 - UI accessibility pass (ARIA roles).
 
 ---
+
 Questions or unsure how to scope a commit? Start small—short, clean commits are always easier to review and revert.

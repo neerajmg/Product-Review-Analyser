@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Universal Review Extractor Test</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
+        .test-result { margin: 10px 0; padding: 10px; background: #f5f5f5; border-radius: 4px; }
+        .success { background: #d4edda; border-color: #c3e6cb; color: #155724; }
+        .error { background: #f8d7da; border-color: #f5c6cb; color: #721c24; }
+        .debug { background: #e3f2fd; border-color: #bbdefb; color: #0d47a1; }
+        pre { background: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto; }
+        button { padding: 8px 16px; margin: 5px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Universal Review Extractor Test</h1>
+    
+    <div class="test-section">
+        <h2>1. Component Loading Test</h2>
+        <button onclick="testComponentLoading()">Test Component Loading</button>
+        <div id="componentResults"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>2. Site Detection Test</h2>
+        <button onclick="testSiteDetection()">Test Site Detection</button>
+        <div id="siteResults"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>3. Flipkart Review HTML Test</h2>
+        <button onclick="testFlipkartHTML()">Test Flipkart Review Extraction</button>
+        <div id="flipkartResults"></div>
+        
+        <!-- Sample Flipkart review HTML for testing -->
+        <div id="flipkartSample" style="display:none;">
+            <div class="_1AtVbE col-12-12">
+                <div class="_2-N8zT">
+                    Really Nice
+                    <p>Fan speed is extremely good, but there is a strong noise of thrusting wind. Considering the price point it's a must buy product.</p>
+                </div>
+                <div class="_3LWZlK">4 ★</div>
+                <div>Sayoni Neogy</div>
+                <div>Certified Buyer, Kolkata</div>
+                <div>Apr, 2024</div>
+            </div>
+            
+            <div class="_1AtVbE col-12-12">
+                <div class="_2-N8zT">
+                    Good quality product
+                    <p>Super hai speed fan,varu vary good</p>
+                </div>
+                <div class="XQDdHH">4 ★</div>
+                <div>Flipkart Customer</div>
+                <div>Certified Buyer, Guntur</div>
+                <div>Mar, 2024</div>
+            </div>
+            
+            <div class="_1AtVbE col-12-12">
+                <div class="_2-N8zT">
+                    This fan does not have oscillation and cannot be tilted.
+                    <p>This fan does not have automatic oscillation as almost all the fans now a days have, and it has no provision to tilt it up and down. It works only in a fixed position. That is a big negative for this fan. Positives: 1. Very light weight. 2. Works in very high speed and air delivery is great.</p>
+                </div>
+                <div class="hGSR34">3 ★</div>
+                <div>Sathyanarayanan A. S.</div>
+                <div>Certified Buyer, Payyannur</div>
+                <div>Mar, 2024</div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="test-section">
+        <h2>4. Universal Extractor Test</h2>
+        <button onclick="testUniversalExtractor()">Test Universal Extractor</button>
+        <div id="universalResults"></div>
+    </div>
+
+    <script>
+        // Load all the extension components
+        function loadScript(src) {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = src;
+                script.onload = resolve;
+                script.onerror = reject;
+                document.head.appendChild(script);
+            });
+        }
+
+        async function testComponentLoading() {
+            const results = document.getElementById('componentResults');
+            results.innerHTML = '<div class="test-result debug">Loading components...</div>';
+            
+            try {
+                // Load all components in order
+                await loadScript('../src/lib/site_database.js');
+                await loadScript('../src/lib/universal_extractor.js');
+                await loadScript('../src/selectors.js');
+                await loadScript('../src/lib/test_cases.js');
+                
+                const components = [
+                    { name: 'SiteDetectionUtils', obj: window.SiteDetectionUtils },
+                    { name: 'EcommerceSiteDB', obj: window.EcommerceSiteDB },
+                    { name: 'UniversalReviewExtractor', obj: window.UniversalReviewExtractor },
+                    { name: 'PPCSelectors', obj: window.PPCSelectors },
+                    { name: 'UniversalTestCases', obj: window.UniversalTestCases }
+                ];
+                
+                let html = '<div class="test-result success">✅ All components loaded successfully!</div>';
+                
+                components.forEach(comp => {
+                    const status = comp.obj ? '✅' : '❌';
+                    html += `<div class="test-result ${comp.obj ? 'success' : 'error'}">${status} ${comp.name}: ${comp.obj ? 'Available' : 'Not loaded'}</div>`;
+                });
+                
+                results.innerHTML = html;
+                
+            } catch (error) {
+                results.innerHTML = `<div class="test-result error">❌ Error loading components: ${error.message}</div>`;
+            }
+        }
+
+        function testSiteDetection() {
+            const results = document.getElementById('siteResults');
+            
+            if (!window.SiteDetectionUtils) {
+                results.innerHTML = '<div class="test-result error">❌ SiteDetectionUtils not loaded. Run component loading test first.</div>';
+                return;
+            }
+            
+            const testSites = [
+                'amazon.com',
+                'flipkart.com', 
+                'ebay.com',
+                'walmart.com',
+                'example-store.myshopify.com',
+                'unknown-site.com'
+            ];
+            
+            let html = '<div class="test-result success">🔍 Site Detection Results:</div>';
+            
+            testSites.forEach(hostname => {
+                const siteInfo = window.SiteDetectionUtils.detectEcommerceSite(hostname);
+                const status = siteInfo ? '✅' : '❌';
+                html += `<div class="test-result ${siteInfo ? 'success' : 'debug'}">${status} ${hostname} → ${siteInfo ? siteInfo.name : 'Unknown'}</div>`;
+            });
+            
+            results.innerHTML = html;
+        }
+
+        function testFlipkartHTML() {
+            const results = document.getElementById('flipkartResults');
+            
+            if (!window.PPCSelectors) {
+                results.innerHTML = '<div class="test-result error">❌ PPCSelectors not loaded. Run component loading test first.</div>';
+                return;
+            }
+            
+            // Create a test document with Flipkart sample HTML
+            const sampleDiv = document.getElementById('flipkartSample');
+            const testContainer = document.createElement('div');
+            testContainer.innerHTML = sampleDiv.innerHTML;
+            document.body.appendChild(testContainer);
+            
+            // Mock document for Flipkart
+            const mockDoc = {
+                location: { hostname: 'www.flipkart.com' },
+                querySelector: selector => testContainer.querySelector(selector),
+                querySelectorAll: selector => testContainer.querySelectorAll(selector)
+            };
+            
+            try {
+                const reviewElements = window.PPCSelectors.findReviewElements(mockDoc);
+                
+                let html = `<div class="test-result success">🎯 Found ${reviewElements.length} review elements</div>`;
+                
+                reviewElements.forEach((el, index) => {
+                    const text = window.PPCSelectors.extractReviewText(el, mockDoc);
+                    const rating = window.PPCSelectors.extractRating(el, mockDoc);
+                    
+                    html += `<div class="test-result debug">
+                        <strong>Review ${index + 1}:</strong><br>
+                        📝 Text: ${text.substring(0, 100)}...<br>
+                        ⭐ Rating: ${rating || 'Not found'}<br>
+                        🏷️ Element: ${el.tagName}.${el.className}
+                    </div>`;
+                });
+                
+                results.innerHTML = html;
+                
+            } catch (error) {
+                results.innerHTML = `<div class="test-result error">❌ Error: ${error.message}</div>`;
+            } finally {
+                // Clean up
+                testContainer.remove();
+            }
+        }
+
+        function testUniversalExtractor() {
+            const results = document.getElementById('universalResults');
+            
+            if (!window.UniversalTestCases) {
+                results.innerHTML = '<div class="test-result error">❌ UniversalTestCases not loaded. Run component loading test first.</div>';
+                return;
+            }
+            
+            results.innerHTML = '<div class="test-result debug">🧪 Running universal extractor tests...</div>';
+            
+            setTimeout(async () => {
+                try {
+                    const testResults = await window.UniversalTestCases.runAllTests();
+                    
+                    let html = '<div class="test-result success">🎉 Universal Extractor Test Complete!</div>';
+                    html += `<div class="test-result debug">📊 Overall Success Rate: ${Math.round(testResults.overallSuccess * 100)}%</div>`;
+                    
+                    // Show detection results
+                    html += '<h4>Site Detection Results:</h4>';
+                    testResults.detection.forEach(result => {
+                        const status = result.passed ? '✅' : '❌';
+                        html += `<div class="test-result ${result.passed ? 'success' : 'error'}">${status} ${result.site}: Expected ${result.expected}, Got ${result.detected}</div>`;
+                    });
+                    
+                    // Show parsing results
+                    html += '<h4>HTML Parsing Results:</h4>';
+                    testResults.parsing.forEach(result => {
+                        const status = (result.textExtracted && result.ratingExtracted) ? '✅' : '⚠️';
+                        html += `<div class="test-result ${(result.textExtracted && result.ratingExtracted) ? 'success' : 'debug'}">${status} ${result.type}: Text=${result.textExtracted ? '✅' : '❌'}, Rating=${result.ratingExtracted ? '✅' : '❌'}</div>`;
+                    });
+                    
+                    results.innerHTML = html;
+                    
+                } catch (error) {
+                    results.innerHTML = `<div class="test-result error">❌ Test Error: ${error.message}</div>`;
+                }
+            }, 100);
+        }
+    </script>
+</body>
+</html>

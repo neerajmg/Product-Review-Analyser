@@ -8,9 +8,11 @@ function load() {
     if (!resp || !resp.ok) return;
     const o = resp.options;
     qs('apiKey').value = o.apiKey || '';
-  qs('fallbackMode').checked = !!o.fallbackMode;
-  if (o.maxPagesCap) qs('maxPagesCap').value = o.maxPagesCap;
-  if (o.maxReviewCount) qs('maxReviewCount').value = o.maxReviewCount;
+    qs('aiProvider').value = o.aiProvider || 'gemini';
+    qs('fallbackMode').checked = !!o.fallbackMode;
+    if (o.maxPagesCap) qs('maxPagesCap').value = o.maxPagesCap;
+    if (o.maxReviewCount) qs('maxReviewCount').value = o.maxReviewCount;
+    updateProviderHelp();
     refreshKeyHealth();
   });
 }
@@ -18,6 +20,7 @@ function load() {
 function save() {
   const payload = {
     apiKey: qs('apiKey').value.trim(),
+    aiProvider: qs('aiProvider').value,
     fallbackMode: qs('fallbackMode').checked,
     maxPagesCap: parseInt(qs('maxPagesCap').value,10) || undefined,
     maxReviewCount: parseInt(qs('maxReviewCount').value,10) || undefined,
@@ -56,6 +59,24 @@ function refreshKeyHealth() {
   });
 }
 
+function updateProviderHelp() {
+  const provider = qs('aiProvider').value;
+  const keyInput = qs('apiKey');
+  
+  switch (provider) {
+    case 'openai':
+      keyInput.placeholder = 'sk-proj-... (OpenAI API key)';
+      break;
+    case 'anthropic':
+      keyInput.placeholder = 'sk-ant-... (Anthropic API key)';
+      break;
+    case 'gemini':
+    default:
+      keyInput.placeholder = 'AIza... (Google Gemini API key)';
+      break;
+  }
+}
+
 function showToast(msg, type='info') {
   let toast = document.querySelector('.ppc-toast');
   if (toast) toast.remove();
@@ -70,6 +91,7 @@ function showToast(msg, type='info') {
 }
 
 function attachEvents(){
+  qs('aiProvider').addEventListener('change', updateProviderHelp);
   qs('saveBtn').addEventListener('click', save);
   qs('testKeyBtn').addEventListener('click', () => {
     const key = qs('apiKey').value.trim();
@@ -108,6 +130,51 @@ function attachEvents(){
       }
     });
   });
+
+  // Rate limit checking
+  const checkRateLimitBtn = document.getElementById('checkRateLimitBtn');
+  if (checkRateLimitBtn) {
+    checkRateLimitBtn.addEventListener('click', () => {
+      const rateLimitStatus = document.getElementById('rateLimitStatus');
+      rateLimitStatus.textContent = '(checking...)';
+      rateLimitStatus.style.color = '#666';
+      
+      chrome.runtime.sendMessage({ type: 'PPC_CHECK_RATE_LIMIT' }, resp => {
+        if (chrome.runtime.lastError) {
+          rateLimitStatus.textContent = 'Error: ' + chrome.runtime.lastError.message;
+          rateLimitStatus.style.color = '#dc2626';
+          return;
+        }
+        
+        if (resp && resp.ok) {
+          const status = resp.status;
+          let color = '#059669'; // green
+          let message = 'API available';
+          
+          if (status === 'rate_limited') {
+            color = '#dc2626'; // red
+            message = 'Rate limited - wait before next request';
+          } else if (status === 'quota_exceeded') {
+            color = '#d97706'; // orange
+            message = 'Quota exceeded - check your billing';
+          } else if (status === 'error') {
+            color = '#dc2626'; // red
+            message = 'API error - check your key';
+          }
+          
+          rateLimitStatus.textContent = message;
+          rateLimitStatus.style.color = color;
+          
+          if (resp.nextRetryAfter) {
+            rateLimitStatus.textContent += ` (retry in ${resp.nextRetryAfter}s)`;
+          }
+        } else {
+          rateLimitStatus.textContent = 'Failed to check status';
+          rateLimitStatus.style.color = '#dc2626';
+        }
+      });
+    });
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {

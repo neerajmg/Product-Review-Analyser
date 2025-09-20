@@ -20,28 +20,43 @@
 <body>
   <h1>Review Analyzer — Settings</h1>
   <p class="ppc-opt-intro">
-    <strong>Gemini API Key Setup:</strong><br>
-  1) Visit <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio – API Keys</a> and create a key (ensure billing/quota enabled).<br>
-    2) Paste the key below and click <em>Save</em>, then <em>Validate Key</em>.<br>
+    <strong>AI Provider Setup:</strong><br>
+    <strong>Google Gemini:</strong> Visit <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio</a> for API keys.<br>
+    <strong>OpenAI:</strong> Visit <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">OpenAI Platform</a> for API keys.<br>
+    <strong>Anthropic:</strong> Visit <a href="https://console.anthropic.com/" target="_blank" rel="noopener">Anthropic Console</a> for API keys.<br>
+    <br>
+    1) Select your preferred AI provider above.<br>
+    2) Paste your API key and click <em>Save</em>, then <em>Validate Key</em>.<br>
     3) Status indicator will show <code>VALID</code>, <code>INVALID</code>, <code>QUOTA EXHAUSTED</code>, or network errors.<br>
-    4) If quota is exhausted or key expires, the extension shows a red badge (!) and an in-page toast when active.<br>
     <br>
     <strong>Fallback mode:</strong> If enabled, only the local deterministic summarizer runs (no API calls).<br>
     <strong>Max pages:</strong> Default deep crawl limit (asks for confirmation when >100).<br>
-    <strong>Security:</strong> Key is stored only via Chrome storage on this browser. It is never sent anywhere except directly to the Gemini API endpoint when summarizing.
+    <strong>Security:</strong> Keys are stored only via Chrome storage on this browser. They are never sent anywhere except directly to the respective AI provider's API endpoint.
   </p>
 
   <fieldset>
     <legend>Configuration</legend>
     <div class="row">
-      <label for="apiKey">Gemini API Key</label>
-      <input id="apiKey" type="text" placeholder="Paste key (optional)" />
+      <label for="aiProvider">AI Provider</label>
+      <select id="aiProvider">
+        <option value="gemini">Google Gemini (gemini-1.5-flash)</option>
+        <option value="openai">OpenAI (gpt-4o-mini)</option>
+        <option value="anthropic">Anthropic (claude-3-haiku)</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="apiKey">API Key</label>
+      <input id="apiKey" type="text" placeholder="Paste your API key here" />
       <button id="saveBtn" class="ppc-inline-btn-margin">Save</button>
       <button id="testKeyBtn">Validate Key</button>
     </div>
     <div class="row ppc-small-text">
       Key Status: <span id="keyStatus">(not checked)</span>
       <button id="recheckBtn" class="ppc-inline-btn-left">Re-check</button>
+    </div>
+    <div class="row ppc-small-text">
+      API Rate Limit Status: <span id="rateLimitStatus">(not checked)</span>
+      <button id="checkRateLimitBtn" class="ppc-inline-btn-left">Check Rate Limit</button>
     </div>
     <div class="row">
       <label><input id="fallbackMode" type="checkbox" class="toggle" /> Fallback mode (local summarizer only)</label>

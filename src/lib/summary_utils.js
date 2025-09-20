@@ -1,12 +1,13 @@
-// Pure summarization utilities extracted for testability.
-// Shared between background service worker and unit tests.
+// Summarization utilities (clean rewrite)
+// Provides: SUMMARY_SCHEMA, validateAgainstSchema, extractFirstJsonBlock, sampleReviewsForPrompt,
+// mockRewriteWithGemini, localFallback, coerceAndClean, heuristicAspectSummary
 
 export const SUMMARY_SCHEMA = {
   type: 'object',
   required: ['pros','cons','note_pros','note_cons'],
   properties: {
-    pros: { type: 'array', maxItems: 8, items: { type: 'object', required:['label','support_count','example_ids'], properties:{ label:{type:'string', maxLength:120}, support_count:{type:'number'}, example_ids:{type:'array', items:{type:'string'}} } } },
-    cons: { type: 'array', maxItems: 8, items: { type: 'object', required:['label','support_count','example_ids'], properties:{ label:{type:'string', maxLength:120}, support_count:{type:'number'}, example_ids:{type:'array', items:{type:'string'}} } } },
+    pros: { type: 'array', maxItems: 8, items: { type:'object', required:['label','support_count','example_ids'], properties:{ label:{type:'string', maxLength:120}, support_count:{type:'number'}, example_ids:{ type:'array', items:{type:'string'} } } } },
+    cons: { type: 'array', maxItems: 8, items: { type:'object', required:['label','support_count','example_ids'], properties:{ label:{type:'string', maxLength:120}, support_count:{type:'number'}, example_ids:{ type:'array', items:{type:'string'} } } } },
     note_pros: { type:'string' },
     note_cons: { type:'string' }
   }
@@ -15,9 +16,7 @@ export const SUMMARY_SCHEMA = {
 export function validateAgainstSchema(obj, schema = SUMMARY_SCHEMA) {
   if (schema.type === 'object') {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
-    if (schema.required) {
-      for (const k of schema.required) if (!(k in obj)) return false;
-    }
+    if (schema.required) for (const k of schema.required) if (!(k in obj)) return false;
     if (schema.properties) {
       for (const [k, def] of Object.entries(schema.properties)) {
         if (obj[k] === undefined) continue;
@@ -32,380 +31,329 @@ export function validateAgainstSchema(obj, schema = SUMMARY_SCHEMA) {
     if (schema.items) return obj.every(it => validateAgainstSchema(it, schema.items));
     return true;
   }
-  if (schema.type === 'string') return typeof obj === 'string' && (schema.maxLength ? obj.length <= schema.maxLength : true);
+  if (schema.type === 'string') return (typeof obj === 'string' || obj === null) && (!schema.maxLength || (obj && obj.length <= schema.maxLength));
   if (schema.type === 'number') return typeof obj === 'number' && !Number.isNaN(obj);
   return false;
 }
 
-export function coerceAndClean(summary) {
-  const safeArr = (arr) => Array.isArray(arr) ? arr.filter(x => x && typeof x.label === 'string').slice(0,8).map(x => ({
-    label: String(x.label).slice(0,120),
-    support_count: Math.max(0, Number(x.support_count)||0),
-    example_ids: Array.isArray(x.example_ids) ? x.example_ids.filter(id => typeof id === 'string').slice(0,5) : []
-  })) : [];
-  const scrub = (label) => label
-    .replace(/\b(name|product|redacted|brand)\b/gi,'')
-    .replace(/\s{2,}/g,' ') // collapse spaces
-    .trim();
-  const WHITELIST_SINGLE = new Set(['battery','battery life','motor','noise','noise level','design','warranty','durability','speed','weight','size','build quality','performance','grinder','grinding','power','taste','flavor','texture','cleaning','ease of use','value','price']);
-  // Consolidate overlapping / nested phrases (e.g. "battery" & "battery life" => keep longer) and merge evidence.
-  function consolidatePhrases(items) {
-    const kept = [];
-    function escapeReg(s){return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
-    for (const item of items.sort((a,b)=> b.label.length - a.label.length || b.support_count - a.support_count)) {
-      const lower = item.label.toLowerCase();
-      let merged = false;
-      for (const k of kept) {
-        const pattern = new RegExp('\\b'+escapeReg(lower)+'\\b','i');
-        if (pattern.test(k.label.toLowerCase())) {
-          // current item is a subset of an already kept longer phrase -> drop entirely
-          merged = true; break;
-        }
-        // If kept phrase is subset of current longer phrase, upgrade kept phrase
-        const revPattern = new RegExp('\\b'+escapeReg(k.label.toLowerCase())+'\\b','i');
-        if (revPattern.test(lower) && item.support_count >= k.support_count) {
-          // replace k with longer item (merge metadata)
-            const newExampleIds = [...k.example_ids];
-            for (const id of (item.example_ids||[])) if (newExampleIds.length <5 && !newExampleIds.includes(id)) newExampleIds.push(id);
-            k.label = item.label; k.support_count = item.support_count; k.example_ids = newExampleIds;
-            merged = true; break;
-        }
-      }
-      if (!merged) kept.push({...item});
-    }
-    return kept;
-  }
-  const filterMeaningful = (items) => items
-    .map(it => ({ ...it, label: scrub(it.label)}))
-    .filter(it => {
-      if (!it.label || it.label.length < 3) return false;
-      if (/^[0-9]+$/.test(it.label)) return false;
-      const words = it.label.split(/\s+/);
-      if (words.length === 1) {
-        const lower = it.label.toLowerCase();
-        // Allow if whitelisted OR sufficiently supported & not a generic adjective
-        if (!WHITELIST_SINGLE.has(lower)) {
-          if (!(it.support_count >= 3 && lower.length >= 4 && !/^(good|great|nice|very|really|also|have|has)$/i.test(lower))) return false;
-        }
-        if (/^(power|work|issue|thing)$/i.test(lower)) return false; // drop generic noise
-      }
-      if (/^(this|that|these|those|have|also|like|good|great|nice|really|very)$/i.test(it.label)) return false;
-      if (/\bdoesn\b|\bt\b/.test(it.label)) return false; // contraction artifacts
-      if (/doesn\s+t|t\s+work/.test(it.label)) return false; // broken negative forms
-      return true;
-    })
-    // consolidate nested phrases after filtering
-    ;
-  const prosRaw = safeArr(summary.pros);
-  const consRaw = safeArr(summary.cons);
-  const pros = consolidatePhrases(filterMeaningful(prosRaw)).slice(0,8);
-  const cons = consolidatePhrases(filterMeaningful(consRaw)).slice(0,8);
-  return {
-    pros,
-    cons,
-    note_pros: pros.length ? (summary.note_pros && typeof summary.note_pros === 'string' ? summary.note_pros.slice(0,200) : '') : 'No pros found',
-    note_cons: cons.length ? (summary.note_cons && typeof summary.note_cons === 'string' ? summary.note_cons.slice(0,200) : '') : 'No cons found'
-  };
-}
-
 export function extractFirstJsonBlock(text) {
+  if (!text) return null;
   const start = text.indexOf('{');
   if (start === -1) return null;
   let depth = 0;
-  for (let i=start; i<text.length; i++) {
+  for (let i=start;i<text.length;i++) {
     const ch = text[i];
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        return text.slice(start, i+1);
-      }
-    }
+    if (ch === '{') depth++; else if (ch === '}') { depth--; if (depth===0) return text.slice(start, i+1); }
   }
   return null;
 }
 
-export function sampleReviewsForPrompt(reviews, maxChars = 12000) {
-  if (!Array.isArray(reviews) || !reviews.length) return [];
-  const buckets = new Map();
+export function sampleReviewsForPrompt(reviews, max=40) {
+  if (!Array.isArray(reviews)) return [];
+  const uniq = new Map();
   for (const r of reviews) {
-    const key = r.rating != null ? String(r.rating) : 'na';
-    if (!buckets.has(key)) buckets.set(key, []);
-    buckets.get(key).push(r);
+    const id = r.id || ('r_'+Math.random().toString(36).slice(2,8));
+    if (!uniq.has(id)) uniq.set(id, { id, rating: r.rating, text: (r.text||'').slice(0,1000) });
+    if (uniq.size >= max) break;
   }
-  for (const b of buckets.values()) b.sort((a,b)=> (b.text||'').length - (a.text||'').length);
-  const ordered = Array.from(buckets.values()).flat();
-  let acc = []; let total = 0;
-  for (const r of ordered) {
-    const chunk = (r.text||'').slice(0,800);
-    if (total + chunk.length > maxChars) break;
-    acc.push({ id: r.id, text: chunk, rating: r.rating });
-    total += chunk.length;
-  }
-  return acc;
+  return [...uniq.values()];
 }
 
+// Simple mock model rewrite (placeholder for offline/ dev )
 export function mockRewriteWithGemini(reviews) {
-  const STOP = new Set(['about','after','again','because','could','therefore','should','might','their','which','would','product','quality','feature','features','great','really','thing','items','having','review','reviews','amazon','india','price','value','money','works','working','using','usage','model','brand','bought','purchase','purchased','thanks','delivery','arrived','packaging','seller','color']);
-  const freq = new Map();
-  for (const r of reviews) {
-    const words = (r.text || '').toLowerCase()
-      .replace(/\b(replaced|issue|issues)\b/g,'issue')
-      .split(/[^a-z0-9]+/)
-      .filter(w => w.length > 3 && w.length < 30 && !STOP.has(w) && !/^\d+$/.test(w));
-    const unique = new Set(words);
-    for (const w of unique) freq.set(w, (freq.get(w) || 0) + 1);
-  }
-  const candidates = [...freq.entries()].filter(([w,c]) => c > 1).sort((a,b)=> b[1]-a[1]).slice(0,14);
-  const mid = Math.ceil(candidates.length/2);
-  const make = (arr, offset) => arr.map(([label,count],i)=>({label, support_count: count, example_ids: reviews.slice((offset+i)%reviews.length, (offset+i)%reviews.length+1).map(r=>r.id).filter(Boolean)}));
-  const pros = make(candidates.slice(0,mid),0);
-  const cons = make(candidates.slice(mid),mid);
-  return coerceAndClean({ pros, cons, note_pros:'', note_cons:'' });
+  // Use heuristic directly for now
+  return heuristicAspectSummary(reviews);
 }
 
+// Local extremely naive fallback (frequency of nouns) retained for legacy chain
 export function localFallback(reviews) {
-  const counts = new Map();
-  const STOP_BG = /\b(name|product|brand|amazon|india|price|value|good|great|very|really|thing|items|works?)\b/i;
-  for (const r of reviews) {
-    const tokens = (r.text || '').toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length >= 3 && !/^\d+$/.test(t));
-    for (let i=0;i<tokens.length-1;i++) {
-      const bigram = tokens[i] + ' ' + tokens[i+1];
-      if (STOP_BG.test(bigram)) continue;
-      counts.set(bigram, (counts.get(bigram)||0)+1);
-    }
+  if (!Array.isArray(reviews) || !reviews.length) return { pros:[], cons:[], note_pros:'No reviews', note_cons:'No reviews'};
+  const freq = new Map();
+  for (const r of reviews.slice(0,120)) {
+    const tokens = (r.text||'').toLowerCase().split(/[^a-z0-9]+/).filter(t=>t.length>3);
+    for (const t of tokens) freq.set(t, (freq.get(t)||0)+1);
   }
-  const top = [...counts.entries()].filter(([b,c])=> c>1).sort((a,b)=> b[1]-a[1]).slice(0,12);
-  const half = Math.ceil(top.length/2);
-  const pros = top.slice(0,half).map(([label,c])=>({label, support_count:c, example_ids:[]}));
-  const cons = top.slice(half).map(([label,c])=>({label, support_count:c, example_ids:[]}));
+  const sorted = [...freq.entries()].sort((a,b)=> b[1]-a[1]).slice(0,10);
+  const pros = sorted.slice(0,5).map(([w,c])=>({ label:w, support_count:c, example_ids:[] }));
+  const cons = sorted.slice(5).map(([w,c])=>({ label:w, support_count:c, example_ids:[] }));
   return coerceAndClean({ pros, cons, note_pros:'', note_cons:'' });
 }
 
-// Aspect-oriented heuristic summarizer (used when no API key) to produce more logical pros/cons
+// Phrase cleaning & final sanitation
+export function coerceAndClean(obj) {
+  // Pre-normalize structure before strict validation to avoid discarding salvageable data
+  if (obj && typeof obj === 'object') {
+    if (!Array.isArray(obj.pros)) obj.pros = Array.isArray(obj.pros)?obj.pros:[];
+    if (!Array.isArray(obj.cons)) obj.cons = Array.isArray(obj.cons)?obj.cons:[];
+    obj.pros = obj.pros.map(e=>({
+      label: typeof e.label==='string'? e.label.slice(0,120):'',
+      support_count: typeof e.support_count==='number'? e.support_count : parseInt(e.support_count,10)||1,
+      example_ids: Array.isArray(e.example_ids)? e.example_ids.filter(x=>typeof x==='string').slice(0,10):[]
+    }));
+    obj.cons = obj.cons.map(e=>({
+      label: typeof e.label==='string'? e.label.slice(0,120):'',
+      support_count: typeof e.support_count==='number'? e.support_count : parseInt(e.support_count,10)||1,
+      example_ids: Array.isArray(e.example_ids)? e.example_ids.filter(x=>typeof x==='string').slice(0,10):[]
+    }));
+    if (typeof obj.note_pros !== 'string') obj.note_pros = '';
+    if (typeof obj.note_cons !== 'string') obj.note_cons = '';
+  }
+  // Try strict validation; if it fails we'll still attempt best-effort cleaning rather than discarding.
+  const schemaOk = validateAgainstSchema({
+    pros: obj.pros,
+    cons: obj.cons,
+    note_pros: obj.note_pros ?? '',
+    note_cons: obj.note_cons ?? ''
+  });
+  const junkSingles = new Set(['thing','item','product','amazon','purchase','quality','issue','issues','problem','problems','experience','time']);
+  function cleanList(list) {
+    const out=[]; const seen=new Set();
+    for (const entry of list) {
+      let label = (entry.label||'').toLowerCase().trim();
+      label = label.replace(/doesn['’]t/g,'does not').replace(/don['’]t/g,'do not').replace(/can['’]t/g,'cannot').replace(/n['’]t\b/g,' not');
+      label = label.replace(/\b(it|they|this|that|these|those)\b/g,'').replace(/\s+/g,' ').trim();
+      if (!label) continue;
+      if (label.split(' ').length===1 && junkSingles.has(label)) continue;
+      if (label.length<3) continue;
+      if (label.length>120) label = label.slice(0,120);
+      if (seen.has(label)) continue; seen.add(label);
+      const support = typeof entry.support_count === 'number' ? entry.support_count : parseInt(entry.support_count,10) || 1;
+      const example_ids = Array.isArray(entry.example_ids) ? entry.example_ids.slice(0,5) : [];
+      out.push({ label, support_count: support, example_ids });
+      if (out.length>=8) break; // enforce max early
+    }
+    return out;
+  }
+  let note_pros = (obj.note_pros||'').slice(0,200);
+  let note_cons = (obj.note_cons||'').slice(0,200);
+  const cleaned = { pros: cleanList(obj.pros||[]), cons: cleanList(obj.cons||[]), note_pros, note_cons };
+  return cleaned;
+}
+
+// Heuristic aspect extraction (robust multi-step)
 export function heuristicAspectSummary(reviews) {
-  if (!Array.isArray(reviews) || !reviews.length) return { pros:[], cons:[], note_pros:'No pros found', note_cons:'No cons found' };
-  const POS_LEX = new Set(['good','great','excellent','amazing','durable','sturdy','stable','bright','clear','lightweight','fast','quiet','smooth','easy','long','compact','useful','handy','sharp','powerful','reliable','efficient','strong','comfortable']);
-  const NEG_LEX = new Set(['bad','poor','slow','noisy','loud','heavy','dull','weak','flimsy','short','difficult','hard','broken','defective','expensive','costly','confusing','fragile','rough','low','leaking','leak','scratch','scratches','crack','cracked','worse']);
-  const STOP = new Set(['the','and','for','with','this','that','these','those','have','has','had','was','were','will','would','could','should','about','after','before','into','from','over','under','very','really','also','just','still','been','are','its','it','they','them','their','on','of','or','in','to','is','as','at']);
-  const ASPECT_SINGLE_WHITELIST = new Set(['battery','motor','durability','design','noise','warranty','weight','size','performance','quality','grinder','grinding','power','taste','flavor','texture','cleaning','ease','value','price','build']);
-  const phraseMap = new Map(); // key -> { phrase, reviews:Set, pos:0, neg:0, examples:Set }
-  const SENT_SPLIT = /[.!?]+/;
-  function singularize(token){
-    if (token.endsWith('ies') && token.length>4) return token.slice(0,-3)+'y';
-    if (token.endsWith('es') && token.length>3) return token.slice(0,-2);
-    if (token.endsWith('s') && token.length>3) return token.slice(0,-1);
-    return token;
+  if (!Array.isArray(reviews) || !reviews.length) {
+    return { pros:[], cons:[], note_pros:'No reviews', note_cons:'No reviews' };
   }
-  function addPhrase(rawPhrase, reviewId, orientation) {
-    const phrase = rawPhrase.trim();
-    if (!phrase || phrase.length < 3) return;
-    if (/^(this|that|also|have|has|good|great|nice|really|very)$/i.test(phrase)) return;
-    const key = phrase.toLowerCase();
-    let entry = phraseMap.get(key);
-    if (!entry) { entry = { phrase, reviews:new Set(), pos:0, neg:0, examples:new Set() }; phraseMap.set(key, entry); }
-    entry.reviews.add(reviewId);
-    if (orientation === 'pos') entry.pos++; else if (orientation === 'neg') entry.neg++;
-    if (entry.examples.size < 3) entry.examples.add(reviewId);
-  }
-  for (const r of reviews) {
-    const text = (r.text||'').toLowerCase()
+  const POS = new Set(['good','great','excellent','amazing','durable','sturdy','stable','bright','clear','lightweight','fast','quiet','smooth','easy','long','compact','useful','handy','sharp','powerful','reliable','efficient','strong','comfortable','value','worth','responsive','accurate','beautiful','bright','vibrant']);
+  const NEG = new Set(['bad','poor','slow','noisy','loud','heavy','dull','weak','flimsy','short','difficult','hard','broken','defective','expensive','costly','confusing','fragile','rough','low','leaking','leak','scratch','scratches','crack','cracked','worse','hot','overheating','overheat','faulty','stopped','useless','dead']);
+  const NEGATORS = new Set(['not','no','never','cannot','can\'t','cant','hardly']);
+  const STOP = new Set(['the','and','for','with','this','that','these','those','have','has','had','was','were','will','would','could','should','about','after','before','into','from','over','under','very','really','also','just','still','been','are','its','it','they','them','their','on','of','or','in','to','is','as','at','by','an','a']);
+  const KEEP_SINGLE = new Set(['battery','motor','design','display','screen','build','performance','quality','noise','portability','weight','size','cleaning','value','price','brightness','color','sound','fan','adapter','charger','power']);
+  const BANNED_SINGLE = new Set(['one','any','use','using','basic','built','looking','plug','do','not','does','did','redacted','name']);
+  const AUX_OR_FUNCTION = new Set(['does','do','did','is','are','was','were','not','can','cannot','cant','will','won','won\'t']);
+  const CANON_MAP = new Map([
+    ['does not work','not working'],
+    ['did not work','not working'],
+    ['not work','not working'],
+    ["won't work",'not working'],
+    ['cant work','not working'],
+    ['can not work','not working']
+  ]);
+  const sentenceSplit = /[.!?]+/;
+  function norm(text){
+    return text.toLowerCase()
       .replace(/doesn['’]t/g,'does not')
       .replace(/isn['’]t/g,'is not')
-      .replace(/can['’]t/g,'can not')
+      .replace(/can['’]t/g,'cannot')
       .replace(/won['’]t/g,'will not')
       .replace(/don['’]t/g,'do not')
       .replace(/didn['’]t/g,'did not')
       .replace(/ain['’]t/g,'is not');
+  }
+  const candidates = new Map(); // phrase -> {reviews:Set,pos:0,neg:0,occ:0,examples:Set}
+  function addCandidate(phrase, reviewId, posInc, negInc){
+    phrase = phrase.trim();
+    if (!phrase || phrase.length<3) return;
+    if (/^(this|that|also|have|has|really|very|nice|good)$/i.test(phrase)) return;
+    // Drop pure auxiliary / negation fragments
+    if (AUX_OR_FUNCTION.has(phrase)) return;
+    if (/^(does|did|is|are|was|were) not$/.test(phrase)) return;
+    if (/^(not|do not|does not|did not)$/.test(phrase)) return;
+    if (/^t work$/.test(phrase)) return;
+    const key = phrase.toLowerCase();
+    let e = candidates.get(key);
+    if (!e){ e={ phrase:key, reviews:new Set(), pos:0, neg:0, occ:0, examples:new Set() }; candidates.set(key,e);}    
+    e.reviews.add(reviewId); e.pos+=posInc; e.neg+=negInc; e.occ++; if (e.examples.size<3) e.examples.add(reviewId);
+  }
+  function genNgrams(tokens){
+    const out=[]; 
+    for (let n=1;n<=3;n++) {
+      for (let i=0;i<=tokens.length-n;i++) {
+        const slice = tokens.slice(i,i+n);
+        // trim stopwords at ends
+        while (slice.length && STOP.has(slice[0])) slice.shift();
+        while (slice.length && STOP.has(slice[slice.length-1])) slice.pop();
+        if (!slice.length) continue;
+        if (n===1 && !KEEP_SINGLE.has(slice[0]) && slice[0].length<5) continue;
+        const phrase = slice.join(' ');
+        if (/^[0-9]+$/.test(phrase)) continue;
+        out.push(phrase);
+      }
+    }
+    return out;
+  }
+  for (const r of reviews) {
     const ratingBias = r.rating != null ? (r.rating >=4 ? 0.6 : (r.rating <=2 ? -0.6 : 0)) : 0;
-    const sentences = text.split(SENT_SPLIT).slice(0,60);
-    for (const s of sentences) {
-      const tokens = s.split(/[^a-z0-9]+/).filter(t => t && t.length<40);
+    const text = norm(r.text||'');
+    const sentences = text.split(sentenceSplit).slice(0,120);
+    for (const sRaw of sentences) {
+      const s = sRaw.trim(); if (!s) continue;
+      const tokens = s.split(/[^a-z0-9]+/).filter(t=>t);
       if (!tokens.length) continue;
-      // Determine sentence sentiment orientation heuristic
-      let posHits=0, negHits=0;
-      for (const t of tokens) { if (POS_LEX.has(t)) posHits++; else if (NEG_LEX.has(t)) negHits++; }
-      const sentimentScore = (posHits - negHits) + ratingBias;
-      const orientation = sentimentScore > 0.3 ? 'pos' : (sentimentScore < -0.3 ? 'neg' : null);
-      // Build candidate bigrams/trigrams biased toward nouns (approx by excluding stopwords edges)
-      for (let i=0;i<tokens.length;i++) {
-        const t1 = tokens[i]; if (!t1) continue;
-        if (STOP.has(t1) && !ASPECT_SINGLE_WHITELIST.has(t1)) continue;
-        const singles = singularize(t1);
-        if (!STOP.has(t1) && (ASPECT_SINGLE_WHITELIST.has(t1) || t1.length>4)) addPhrase(singles, r.id, orientation);
-        // bigram
-        if (i+1<tokens.length) {
-          const t2 = tokens[i+1]; if (!t2) continue;
-          if (STOP.has(t2)) continue;
-          const bigram = singularize(t1)+' '+singularize(t2);
-          if (!/\b(?:the|and|for)\b/.test(bigram)) addPhrase(bigram, r.id, orientation);
-          // adjective+noun pattern for negative emphasis (e.g., noisy motor, flimsy build, short battery life)
-          if (NEG_LEX.has(t1) && !STOP.has(t2)) addPhrase(t1+' '+t2, r.id, 'neg');
-          if (POS_LEX.has(t1) && !STOP.has(t2)) addPhrase(t1+' '+t2, r.id, 'pos');
-          if (t1==='does' && t2==='not' && i+2<tokens.length && tokens[i+2]==='work') addPhrase('not working', r.id, 'neg');
-        }
-        // trigram
-        if (i+2<tokens.length) {
-          const t2 = tokens[i+1], t3 = tokens[i+2];
-            if (STOP.has(t2) || STOP.has(t3)) continue;
-            const trigram = singularize(t1)+' '+singularize(t2)+' '+singularize(t3);
-            addPhrase(trigram, r.id, orientation);
-            // special handling: short battery life pattern
-            if ((t1==='short' || t1==='long') && t2==='battery' && t3==='life') {
-              addPhrase(t1+' battery life', r.id, t1==='short' ? 'neg':'pos');
-            }
-        }
-        // cleaning difficulty phrases
-        if (t1==='cleaning' && i+1<tokens.length) {
-          const t2 = tokens[i+1];
-          if (t2==='difficult' || t2==='hard') addPhrase('cleaning difficult', r.id, 'neg');
-        }
+      // sentiment within sentence
+      let posHits=0, negHits=0, negatorPresent=false;
+      for (const t of tokens){ if (POS.has(t)) posHits++; if (NEG.has(t)) negHits++; if (NEGATORS.has(t)) negatorPresent=true; }
+      let score = (posHits - negHits) + ratingBias;
+      if (negatorPresent) score -= 0.6; // shift toward negative if negation present
+      const orientation = score > 0.4 ? 'pos' : (score < -0.4 ? 'neg' : null);
+      // n-grams
+      const ngrams = genNgrams(tokens);
+      for (const ng of ngrams) {
+        const w = ng.split(/\s+/);
+        let p=0,n=0;
+        for (const wTok of w){ if (POS.has(wTok)) p++; if (NEG.has(wTok)) n++; }
+        // adjust for negators near this ngram in original sentence window
+        if (negatorPresent && p>0 && n===0) { n += p; p=0; }
+        if (orientation==='pos') p++; else if (orientation==='neg') n++;
+        addCandidate(ng, r.id, p, n);
       }
-      // Pattern-based extraction for richer phrases
-      const patternSpecs = [
-        { re: /not\s+([a-z]{3,}(?:\s+[a-z]{3,})?)/g, orient:'neg', map:(m)=> 'not '+m[1] },
-        { re: /does not\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'not '+m[1] },
-        { re: /did not\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'not '+m[1] },
-        { re: /can not\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'cannot '+m[1] },
-        { re: /no\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'no '+m[1] },
-        { re: /lack of\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'lack of '+m[1] },
-        { re: /poor\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'poor '+m[1] },
-        { re: /too\s+(slow|loud|noisy|heavy|hot|expensive)/g, orient:'neg', map:(m)=> 'too '+m[1] },
-        { re: /difficult to\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'difficult to '+m[1] },
-        { re: /hard to\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'hard to '+m[1] },
-        { re: /overheat(?:ing)?/g, orient:'neg', map:()=> 'overheating' },
-        { re: /value for money/g, orient:'pos', map:()=> 'value for money' },
-        { re: /worth the price/g, orient:'pos', map:()=> 'worth the price' },
-        { re: /easy to\s+([a-z]{3,})/g, orient:'pos', map:(m)=> 'easy to '+m[1] },
-        { re: /easy cleaning/g, orient:'pos', map:()=> 'easy cleaning' },
-        { re: /smooth grinding/g, orient:'pos', map:()=> 'smooth grinding' },
-        { re: /fine grinding/g, orient:'pos', map:()=> 'fine grinding' }
-      ];
-      for (const spec of patternSpecs) {
-        let m; spec.re.lastIndex = 0; // reset
-        while ((m = spec.re.exec(s)) !== null) {
-          const phrase = spec.map(m).trim();
-            if (phrase && phrase.length < 80) addPhrase(phrase, r.id, spec.orient);
+      // pattern phrases (domain-specific aspect inference)
+      if (/not\s+working/.test(s)) addCandidate('not working', r.id, 0, 2);
+      if (/not\s+charging/.test(s)) addCandidate('not charging', r.id, 0, 2);
+      if (/easy\s+to\s+clean/.test(s)) addCandidate('easy to clean', r.id, 2, 0);
+      if (/easy\s+to\s+use/.test(s)) addCandidate('easy to use', r.id, 2, 0);
+      if (/value\s+for\s+money/.test(s)) addCandidate('value for money', r.id, 2, 0);
+      if (/worth\s+the\s+price/.test(s)) addCandidate('worth the price', r.id, 2, 0);
+      if (/too\s+noisy/.test(s)) addCandidate('too noisy', r.id, 0, 2);
+      if (/overheat|overheating|gets\s+hot/.test(s)) addCandidate('overheating', r.id, 0, 2);
+      if (/battery\s+life/.test(s)) addCandidate('battery life', r.id, 2, 0);
+      if (/(build|overall)\s+quality/.test(s)) addCandidate('build quality', r.id, 2, 0);
+      if (/power\s+(adapter|plug|charger)/.test(s)) addCandidate('power adapter', r.id, 0, orientation==='neg'?2:0);
+      if (/(screen|display)\s+(brightness|quality|clarity|size)/.test(s)) {
+        const m = s.match(/(screen|display)\s+(brightness|quality|clarity|size)/);
+        if (m) addCandidate(`${m[1]} ${m[2]}`, r.id, orientation==='neg'?0:2, orientation==='neg'?2:0);
+      }
+      if (/(charging|charge)\s+(speed|time)/.test(s)) addCandidate('charging speed', r.id, orientation==='neg'?0:2, orientation==='neg'?2:0);
+      // Canonicalization for broken contractions (e.g., "does n t work" cases already normalized earlier but keep safety)
+      if (/does\s+not\s+work/.test(s)) addCandidate('not working', r.id, 0, 2);
+      if (/did\s+not\s+work/.test(s)) addCandidate('not working', r.id, 0, 2);
+    }
+  }
+  // Consolidate: prefer longer phrases when they contain a shorter one with similar support
+  const entries = [...candidates.values()];
+  entries.sort((a,b)=> b.reviews.size - a.reviews.size || (b.pos+b.neg) - (a.pos+a.neg));
+  const dropped = new Set();
+  // First, drop single tokens if a multi-word containing them has reasonable support
+  const byPhrase = new Map(entries.map(e=>[e.phrase,e]));
+  for (const e of entries) {
+    if (e.phrase.split(' ').length===1) {
+      for (const longer of entries) {
+        if (longer.phrase.split(' ').length>1 && longer.phrase.includes(e.phrase)) {
+          if (longer.reviews.size >= e.reviews.size * 0.6) {
+            dropped.add(e.phrase); break;
+          }
         }
       }
     }
   }
-  // Promote multi-word phrases over their contained single tokens when support comparable
-  const singlesToDrop = new Set();
-  for (const entry of phraseMap.values()) {
-    if (!/\s/.test(entry.phrase)) continue; // only multi-word
-    const tokens = entry.phrase.split(/\s+/);
-    for (const t of tokens) {
-      const single = phraseMap.get(t);
-      if (single && single.reviews.size <= entry.reviews.size && !['battery','motor'].includes(t)) singlesToDrop.add(t);
-    }
-  }
-  for (const key of singlesToDrop) phraseMap.delete(key);
-  // Canonical merge of similar phrases (order-insensitive for small sets) to reduce duplicates
-  const LINKING = new Set(['became','is','was','were','be','been','being','very','really','quite','too']);
-  const mergedMap = new Map();
-  for (const [key, entry] of phraseMap.entries()) {
-    const tokens = entry.phrase.toLowerCase().split(/\s+/).filter(t => t && !LINKING.has(t));
-    let canonKey = null;
-    if (tokens.length > 1 && tokens.length <= 3) {
-      const sorted = [...tokens].sort();
-      canonKey = sorted.join('|');
-    }
-    if (!canonKey) { mergedMap.set(key, entry); continue; }
-    let existing = mergedMap.get(canonKey);
-    if (!existing) {
-      // choose representative phrase: prefer one without linking words and shorter token count
-      existing = { ...entry };
-      mergedMap.set(canonKey, existing);
-    } else {
-      // merge stats
-      for (const rId of entry.reviews) existing.reviews.add(rId);
-      existing.pos += entry.pos;
-      existing.neg += entry.neg;
-      for (const ex of entry.examples) if (existing.examples.size < 3) existing.examples.add(ex);
-      // choose better phrase (fewer tokens or no linking words)
-      const existingTokens = existing.phrase.split(/\s+/).filter(Boolean);
-      const candTokens = entry.phrase.split(/\s+/).filter(Boolean);
-      const existingHasLink = existingTokens.some(t=>LINKING.has(t.toLowerCase()));
-      const candHasLink = candTokens.some(t=>LINKING.has(t.toLowerCase()));
-      if ((candTokens.length < existingTokens.length) || (existingHasLink && !candHasLink)) {
-        existing.phrase = entry.phrase;
+  // Original containment rule (keep multi-word dominance) still applies
+  for (let i=0;i<entries.length;i++) {
+    if (dropped.has(entries[i].phrase)) continue;
+    for (let j=i+1;j<entries.length;j++) {
+      if (dropped.has(entries[j].phrase)) continue;
+      if (entries[i].phrase.includes(entries[j].phrase) && entries[j].phrase.split(' ').length===1 && entries[i].phrase.split(' ').length>1) {
+        dropped.add(entries[j].phrase);
       }
     }
   }
-  // Replace phraseMap values with merged results if any merges occurred
-  if (mergedMap.size) {
-    // If mergedMap keys are canonical compound keys, keep their entry under a synthetic key of phrase
-    const newPhraseMap = new Map();
-    for (const v of mergedMap.values()) newPhraseMap.set(v.phrase.toLowerCase(), v);
-    phraseMap.clear();
-    for (const [k,v] of newPhraseMap.entries()) phraseMap.set(k,v);
-  }
-  // Aggregate and classify
   const pros=[]; const cons=[];
-  for (const entry of phraseMap.values()) {
-    const support = entry.reviews.size;
-    if (support < 2) {
-      // Allow strong negative singletons from low-rated context
-      if (!(entry.neg>=1 && /(noisy|short|flimsy|weak|difficult|hard|broken|defective|scratch|crack|leak|leaking|expensive)/.test(entry.phrase))) continue;
-    }
-    const net = entry.pos - entry.neg;
-    let bucket=null;
-    if (net > 0.3) bucket='pros'; else if (net < -0.3) bucket='cons';
-    else {
-      // tie-break using average polarity ratio
-      if (entry.pos > entry.neg) bucket='pros'; else if (entry.neg > entry.pos) bucket='cons'; else {
-        // If still neutral but strong support, infer from majority of associated ratings if available
-        if (support >= 3) {
-          // crude heuristic: if most related reviews are high rated treat as pro, low rated as con
-          bucket = 'pros'; // optimistic default
-          if (entry.neg > entry.pos) bucket='cons';
-        }
+  for (const e of entries){
+    if (dropped.has(e.phrase)) continue;
+    if (/redacted/.test(e.phrase)) continue;
+    if (e.phrase === 'do not' || e.phrase === 'does not') continue;
+    if (e.phrase.split(' ').length===1 && BANNED_SINGLE.has(e.phrase)) continue;
+    // Canonical mapping (merge counts into canonical phrase)
+    const canon = CANON_MAP.get(e.phrase);
+    if (canon) {
+      let target = candidates.get(canon);
+      if (!target) {
+        target = { phrase: canon, reviews:new Set(), pos:0, neg:0, occ:0, examples:new Set() };
+        candidates.set(canon, target);
       }
+      e.reviews.forEach(rid=>target.reviews.add(rid));
+      target.pos += e.pos; target.neg += e.neg; target.occ += e.occ;
+      e._consumed = true;
+      continue;
     }
-    // direct override: if phrase contains a negative adjective and has any neg evidence
-    if (!bucket && /\b(noisy|short|flimsy|weak|difficult|hard|broken|defective|scratch|crack|leak|leaking|expensive)\b/.test(entry.phrase) && entry.neg>=1) bucket='cons';
+    const support = e.reviews.size;
+    const polarity = e.pos - e.neg;
+    // classify
+    let bucket=null;
+    if (polarity > 1) bucket='pros'; else if (polarity < -1) bucket='cons';
+    else {
+      if (polarity > 0.5 && support>=2) bucket='pros';
+      else if (polarity < -0.5 && support>=1) bucket='cons';
+    }
+    // fallback: strongly negative words present
+    if (!bucket && /not |too |overheating|faulty|broken|defective|noisy|difficult|hard/.test(e.phrase) && support>=1 && (e.neg>0 || polarity<0)) bucket='cons';
+    if (!bucket && /(easy to|value for money|worth the price|smooth|quiet|durable|sturdy)/.test(e.phrase) && (e.pos>0 || polarity>0.5)) bucket='pros';
     if (!bucket) continue;
-    const obj = { label: entry.phrase, support_count: support, example_ids: [...entry.examples] };
+    const obj = { label: e.phrase, support_count: support, example_ids: [...e.examples] };
     if (bucket==='pros') pros.push(obj); else cons.push(obj);
   }
-  // Post-pass: move obviously negative lexical phrases into cons if misbucketed
-  const NEG_HINT = /(noisy|short|difficult|hard|flimsy|weak|broken|defective|scratch|crack|leak|leaking|expensive)/i;
-  for (let i=pros.length-1; i>=0; i--) {
-    if (NEG_HINT.test(pros[i].label) && !cons.find(c=>c.label===pros[i].label)) {
-      cons.push(pros[i]); pros.splice(i,1);
+  // Ensure diversity: limit duplicates starting with same first token
+  function dedupe(list){
+    const seenFirst = new Set();
+    const out=[];
+    for (const item of list.sort((a,b)=> b.support_count - a.support_count || a.label.localeCompare(b.label))) {
+      const first = item.label.split(' ')[0];
+      if (seenFirst.has(first) && item.label.split(' ').length === 1) continue;
+      seenFirst.add(first);
+      out.push(item);
+      if (out.length>=8) break;
+    }
+    return out;
+  }
+  const finalPros = dedupe(pros);
+  let finalCons = dedupe(cons);
+  // Cluster consolidation for power/charging elements
+  function clusterReplace(list, tokens, label){
+    const members = list.filter(i=> tokens.some(t=> i.label===t));
+    if (members.length>=2) {
+      const support = new Set(); const examples = new Set();
+      for (const m of members){ support.add(m.support_count); (m.example_ids||[]).forEach(id=>examples.add(id)); }
+      const totalSupport = members.reduce((a,b)=> a + b.support_count, 0);
+      list = list.filter(i=> !members.includes(i));
+      list.unshift({ label, support_count: totalSupport, example_ids:[...examples].slice(0,5) });
+    }
+    return list;
+  }
+  finalCons = clusterReplace(finalCons, ['power','adapter','charger','plug'], 'power / charging issues');
+  // Remove leftover banned singles after clustering
+  function purgeSingles(list){ return list.filter(i=> !(i.label.split(' ').length===1 && BANNED_SINGLE.has(i.label))); }
+  let cleanedPros = purgeSingles(finalPros);
+  const cleanedCons = purgeSingles(finalCons);
+  // Ensure at least one multi-word pro if any multi-word candidate exists
+  if (cleanedPros.length && cleanedPros.every(p=> p.label.split(' ').length===1)) {
+    const multi = entries.filter(e=> !dropped.has(e.phrase) && !BANNED_SINGLE.has(e.phrase) && e.phrase.split(' ').length>1 && (e.pos - e.neg) > 0).sort((a,b)=> b.reviews.size - a.reviews.size)[0];
+    if (multi) {
+      cleanedPros.unshift({ label: multi.phrase, support_count: multi.reviews.size, example_ids:[...multi.examples].slice(0,3) });
+      // Remove duplicate single if exceeding limit handled by coerce later
     }
   }
-  // Likewise move strongly positive that slipped into cons
-  const POS_HINT = /(quiet|long|durable|sturdy|stable|easy|comfortable|powerful|reliable|efficient|sharp)/i;
-  for (let i=cons.length-1; i>=0; i--) {
-    if (POS_HINT.test(cons[i].label) && !pros.find(p=>p.label===cons[i].label)) {
-      pros.push(cons[i]); cons.splice(i,1);
-    }
+  // If still no cons, relax negative threshold: pick top negative-leaning phrases not already in pros
+  if (!cleanedCons.length) {
+    const negCandidates = entries.filter(e=> !dropped.has(e.phrase) && !cleanedPros.find(p=>p.label===e.phrase) && (e.neg>0 || /(not |no |too |overheating|faulty|broken|defective|noisy|difficult|hard)/.test(e.phrase)) ).slice(0,6);
+    cleanedCons.push(...negCandidates.map(e=> ({ label: e.phrase, support_count: e.reviews.size, example_ids:[...e.examples] })));
   }
-  // Fallback: if cons empty, allow inclusion of single-support negative phrases
-  if (!cons.length) {
-    const negativeSingles = [];
-    for (const entry of phraseMap.values()) {
-      if (entry.reviews.size === 1 && entry.neg > 0 && /(noisy|short|flimsy|weak|difficult|hard|broken|defective|scratch|crack|leak|leaking|expensive)/.test(entry.phrase)) {
-        negativeSingles.push({ label: entry.phrase, support_count: entry.reviews.size, example_ids: [...entry.examples] });
-      }
-    }
-    negativeSingles.sort((a,b)=> b.support_count - a.support_count || a.label.localeCompare(b.label));
-    cons.push(...negativeSingles.slice(0,5));
+  if (globalThis && globalThis.__PPC_DEBUG_SUMMARY) {
+    globalThis.__PPC_DEBUG_SUMMARY.last = { rawCandidates: entries.slice(0,50).map(e=>({ phrase:e.phrase, support:e.reviews.size, pos:e.pos, neg:e.neg })) };
   }
-  // Fallback: if pros empty, include top frequent neutral/positive phrases
-  if (!pros.length) {
-    const positiveSingles = [];
-    for (const entry of phraseMap.values()) {
-      if (entry.reviews.size === 1 && entry.pos > 0 && /(long|quiet|durable|sturdy|easy|comfortable|powerful|reliable|efficient|sharp|fast|lightweight)/.test(entry.phrase)) {
-        positiveSingles.push({ label: entry.phrase, support_count: entry.reviews.size, example_ids: [...entry.examples] });
-      }
-    }
-    positiveSingles.sort((a,b)=> b.support_count - a.support_count || a.label.localeCompare(b.label));
-    pros.push(...positiveSingles.slice(0,5));
-  }
-  pros.sort((a,b)=> b.support_count - a.support_count || a.label.localeCompare(b.label));
-  cons.sort((a,b)=> b.support_count - a.support_count || a.label.localeCompare(b.label));
-  return coerceAndClean({ pros:pros.slice(0,14), cons:cons.slice(0,14), note_pros:'', note_cons:'' });
+  return coerceAndClean({ pros: cleanedPros, cons: cleanedCons, note_pros:'', note_cons:'' });
+}
+
+// Expose debug namespace (optional)
+if (typeof globalThis !== 'undefined' && !globalThis.__PPC_DEBUG_SUMMARY) {
+  globalThis.__PPC_DEBUG_SUMMARY = { enabled: false };
 }

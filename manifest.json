@@ -25,7 +25,7 @@
   "content_scripts": [
     {
       "matches": ["*://*/*"],
-      "js": ["src/selectors.js", "src/content.js"],
+      "js": ["src/lib/site_database.js", "src/lib/universal_extractor.js", "src/selectors.js", "src/content.js"],
       "run_at": "document_idle"
     }
   ],

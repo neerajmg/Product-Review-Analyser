@@ -7,6 +7,27 @@ const openOptionsLink = document.getElementById('openOptions');
 const keyIndicator = document.getElementById('keyIndicator');
 const healthDot = document.getElementById('healthDot');
 
+const clearCacheBtn = document.getElementById('clearCacheBtn');
+
+if (clearCacheBtn) {
+  clearCacheBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    setStatus('Clearing cache...');
+    chrome.runtime.sendMessage({ type: 'PPC_CLEAR_CACHE' }, (response) => {
+      if (chrome.runtime.lastError) {
+        setStatus(`Error: ${chrome.runtime.lastError.message}`);
+      } else if (response && response.ok) {
+        setStatus('Cache cleared successfully.');
+        resultsEl.hidden = true;
+        resultsEl.innerHTML = '';
+        setTimeout(() => setStatus(''), 2000);
+      } else {
+        setStatus('Failed to clear cache.');
+      }
+    });
+  });
+}
+
 openOptionsLink.addEventListener('click', (e) => {
   e.preventDefault();
   chrome.runtime.openOptionsPage();
