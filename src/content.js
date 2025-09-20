@@ -40,18 +40,28 @@ function findNextPageUrl() {
   return genericNext ? genericNext.href : null;
 }
 
-/** Extract review data using selectors */
-function extractReviewsOnPage() {
+/** Async extract (wait briefly for selectors.js if not yet attached) */
+async function extractReviewsOnPageAsync() {
+  if (!window.PPCSelectors) {
+    // Load once per page if missing
+    if (!window.__ppcSelectorsLoadPromise) {
+      window.__ppcSelectorsLoadPromise = new Promise(res => {
+        try {
+          const script = document.createElement('script');
+          script.src = chrome.runtime.getURL('src/selectors.js');
+          script.onload = () => { res(true); script.remove(); };
+          script.onerror = () => { res(false); };
+          document.documentElement.appendChild(script);
+        } catch(_) { res(false); }
+        // Safety timeout (500ms)
+        setTimeout(()=>res(!!window.PPCSelectors), 500);
+      });
+    }
+    await window.__ppcSelectorsLoadPromise;
+  }
   const selectors = window.PPCSelectors;
   if (!selectors) {
-    console.warn('PPC: selectors not loaded – attempting dynamic load');
-    try {
-      const script = document.createElement('script');
-      script.src = chrome.runtime.getURL('src/selectors.js');
-      script.onload = () => script.remove();
-      document.documentElement.appendChild(script);
-    } catch(_) {}
-    // Fallback immediately this cycle; next extraction attempt should see PPCSelectors
+    // Still not available – fallback quietly (no noisy console spam every request)
     return heuristicFallbackExtract();
   }
   const arr = selectors.findReviewElements(document).map(el => ({
@@ -59,10 +69,7 @@ function extractReviewsOnPage() {
     text: selectors.extractReviewText(el),
     rating: selectors.extractRating(el)
   }));
-  if (!arr.length) {
-    // fallback when custom selectors yield nothing (e.g., product detail first page not in review listing layout)
-    return heuristicFallbackExtract();
-  }
+  if (!arr.length) return heuristicFallbackExtract();
   return arr;
 }
 
@@ -113,17 +120,19 @@ function ensureBaseStyles(){
 // Listener for background or popup requests
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'PPC_EXTRACT_PAGE') {
-    try {
-      const meta = detectCaptchaOrBlock();
-      const reviews = extractReviewsOnPage();
-      const nextPageUrl = findNextPageUrl();
-      console.log('PPC: PAGE-EXTRACT reviews=', reviews.length, 'next=', !!nextPageUrl, meta);
-      sendResponse({ reviews, nextPageUrl, ...meta });
-    } catch (e) {
-      console.error('PPC: CONTENT-ERR', e);
-      sendResponse({ reviews: [], nextPageUrl: null, error: e.message });
-    }
-    return true;
+    (async () => {
+      try {
+        const meta = detectCaptchaOrBlock();
+        const reviews = await extractReviewsOnPageAsync();
+        const nextPageUrl = findNextPageUrl();
+        console.log('PPC: PAGE-EXTRACT reviews=', reviews.length, 'next=', !!nextPageUrl, meta);
+        sendResponse({ reviews, nextPageUrl, ...meta });
+      } catch (e) {
+        console.error('PPC: CONTENT-ERR', e);
+        sendResponse({ reviews: [], nextPageUrl: null, error: e.message });
+      }
+    })();
+    return true; // async
   } else if (msg.type === 'PPC_SHOW_DEEP_CRAWL_MODAL') {
     injectDeepCrawlModal(msg.robots || { ok:false }, msg.maxPagesCap || 60);
   } else if (msg.type === 'PPC_CRAWL_PROGRESS') {
