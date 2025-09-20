@@ -261,8 +261,46 @@ export function heuristicAspectSummary(reviews) {
           if (t2==='difficult' || t2==='hard') addPhrase('cleaning difficult', r.id, 'neg');
         }
       }
+      // Pattern-based extraction for richer phrases
+      const patternSpecs = [
+        { re: /not\s+([a-z]{3,}(?:\s+[a-z]{3,})?)/g, orient:'neg', map:(m)=> 'not '+m[1] },
+        { re: /does not\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'not '+m[1] },
+        { re: /did not\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'not '+m[1] },
+        { re: /can not\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'cannot '+m[1] },
+        { re: /no\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'no '+m[1] },
+        { re: /lack of\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'lack of '+m[1] },
+        { re: /poor\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'poor '+m[1] },
+        { re: /too\s+(slow|loud|noisy|heavy|hot|expensive)/g, orient:'neg', map:(m)=> 'too '+m[1] },
+        { re: /difficult to\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'difficult to '+m[1] },
+        { re: /hard to\s+([a-z]{3,})/g, orient:'neg', map:(m)=> 'hard to '+m[1] },
+        { re: /overheat(?:ing)?/g, orient:'neg', map:()=> 'overheating' },
+        { re: /value for money/g, orient:'pos', map:()=> 'value for money' },
+        { re: /worth the price/g, orient:'pos', map:()=> 'worth the price' },
+        { re: /easy to\s+([a-z]{3,})/g, orient:'pos', map:(m)=> 'easy to '+m[1] },
+        { re: /easy cleaning/g, orient:'pos', map:()=> 'easy cleaning' },
+        { re: /smooth grinding/g, orient:'pos', map:()=> 'smooth grinding' },
+        { re: /fine grinding/g, orient:'pos', map:()=> 'fine grinding' }
+      ];
+      for (const spec of patternSpecs) {
+        let m; spec.re.lastIndex = 0; // reset
+        while ((m = spec.re.exec(s)) !== null) {
+          const phrase = spec.map(m).trim();
+            if (phrase && phrase.length < 80) addPhrase(phrase, r.id, spec.orient);
+        }
+      }
     }
   }
+  // Promote multi-word phrases over their contained single tokens when support comparable
+  const singlesToDrop = new Set();
+  for (const entry of phraseMap.values()) {
+    if (!/\s/.test(entry.phrase)) continue; // only multi-word
+    const tokens = entry.phrase.split(/\s+/);
+    for (const t of tokens) {
+      const single = phraseMap.get(t);
+      if (single && single.reviews.size <= entry.reviews.size && !['battery','motor'].includes(t)) singlesToDrop.add(t);
+    }
+  }
+  for (const key of singlesToDrop) phraseMap.delete(key);
   // Canonical merge of similar phrases (order-insensitive for small sets) to reduce duplicates
   const LINKING = new Set(['became','is','was','were','be','been','being','very','really','quite','too']);
   const mergedMap = new Map();
