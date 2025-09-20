@@ -56,13 +56,17 @@ async function computeCacheKey(url, reviews) {
 function loadOptions() {
   return new Promise(resolve => {
     chrome.storage.sync.get(STORAGE_KEYS.OPTIONS, data => {
-      resolve(Object.assign({
+      const defaults = {
         fallbackMode: true,
         apiKey: '',
         aiProvider: 'gemini',
         maxPagesCap: DEFAULT_MAX_PAGES_CAP,
         maxReviewCount: DEFAULT_MAX_REVIEW_COUNT
-      }, data[STORAGE_KEYS.OPTIONS] || {}));
+      };
+      
+      // Safe access to stored options
+      const storedOptions = data && data[STORAGE_KEYS.OPTIONS] ? data[STORAGE_KEYS.OPTIONS] : {};
+      resolve(Object.assign(defaults, storedOptions));
     });
   });
 }
