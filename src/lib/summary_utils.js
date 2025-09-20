@@ -87,8 +87,11 @@ export function coerceAndClean(summary) {
         if (!WHITELIST_SINGLE.has(lower)) {
           if (!(it.support_count >= 3 && lower.length >= 4 && !/^(good|great|nice|very|really|also|have|has)$/i.test(lower))) return false;
         }
+        if (/^(power|work|issue|thing)$/i.test(lower)) return false; // drop generic noise
       }
       if (/^(this|that|these|those|have|also|like|good|great|nice|really|very)$/i.test(it.label)) return false;
+      if (/\bdoesn\b|\bt\b/.test(it.label)) return false; // contraction artifacts
+      if (/doesn\s+t|t\s+work/.test(it.label)) return false; // broken negative forms
       return true;
     })
     // consolidate nested phrases after filtering
@@ -206,7 +209,14 @@ export function heuristicAspectSummary(reviews) {
     if (entry.examples.size < 3) entry.examples.add(reviewId);
   }
   for (const r of reviews) {
-    const text = (r.text||'').toLowerCase();
+    const text = (r.text||'').toLowerCase()
+      .replace(/doesn['’]t/g,'does not')
+      .replace(/isn['’]t/g,'is not')
+      .replace(/can['’]t/g,'can not')
+      .replace(/won['’]t/g,'will not')
+      .replace(/don['’]t/g,'do not')
+      .replace(/didn['’]t/g,'did not')
+      .replace(/ain['’]t/g,'is not');
     const ratingBias = r.rating != null ? (r.rating >=4 ? 0.6 : (r.rating <=2 ? -0.6 : 0)) : 0;
     const sentences = text.split(SENT_SPLIT).slice(0,60);
     for (const s of sentences) {
@@ -232,6 +242,7 @@ export function heuristicAspectSummary(reviews) {
           // adjective+noun pattern for negative emphasis (e.g., noisy motor, flimsy build, short battery life)
           if (NEG_LEX.has(t1) && !STOP.has(t2)) addPhrase(t1+' '+t2, r.id, 'neg');
           if (POS_LEX.has(t1) && !STOP.has(t2)) addPhrase(t1+' '+t2, r.id, 'pos');
+          if (t1==='does' && t2==='not' && i+2<tokens.length && tokens[i+2]==='work') addPhrase('not working', r.id, 'neg');
         }
         // trigram
         if (i+2<tokens.length) {
