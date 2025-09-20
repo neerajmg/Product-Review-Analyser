@@ -196,38 +196,7 @@ deepCrawlBtn.addEventListener('click', () => {
   });
 });
 
-function updateHealthIndicator() {
-  chrome.runtime.sendMessage({ type: 'PPC_GET_KEY_HEALTH' }, resp => {
-    let status = resp && resp.ok && resp.health && resp.health.status;
-    
-    // Remove all health classes
-    healthDot.className = 'health-indicator';
-    
-    // Add appropriate class based on status
-    if (status === 'valid') {
-      healthDot.classList.add('healthy');
-      healthDot.title = 'AI service connected';
-    } else if (status === 'invalid' || status === 'missing') {
-      healthDot.classList.add('error');
-      healthDot.title = 'AI service not configured';
-    } else if (status === 'quota_exhausted') {
-      healthDot.classList.add('warning');
-      healthDot.title = 'AI service quota exhausted';
-    } else if (status === 'network_error') {
-      healthDot.classList.add('warning');
-      healthDot.title = 'AI service connection issue';
-    } else {
-      healthDot.title = 'AI service status unknown';
-    }
-    if (resp && resp.health) {
-      const msg = status.toUpperCase() + (resp.health.message ? ': ' + resp.health.message : '');
-      keyIndicator.title = msg;
-      if (healthDot) healthDot.title = msg;
-    }
-  });
-}
 
-updateKeyIndicator();
 
 function renderSummary(summary) {
   resultsEl.hidden = false;
@@ -248,24 +217,7 @@ function renderSummary(summary) {
   });
 }
 
-// Initialize health indicator system
-function initHealthIndicators() {
-  updateHealthIndicator('gemini-health', 'checking');
-  updateHealthIndicator('openai-health', 'checking');
-  
-  // Check API health status using existing message type
-  chrome.runtime.sendMessage({type: 'PPC_GET_KEY_HEALTH'}, (response) => {
-    if (response && response.ok && response.health) {
-      const geminiStatus = response.health.gemini === 'valid' ? 'healthy' : 'error';
-      const openaiStatus = response.health.openai === 'valid' ? 'healthy' : 'error';
-      updateHealthIndicator('gemini-health', geminiStatus);
-      updateHealthIndicator('openai-health', openaiStatus);
-    } else {
-      updateHealthIndicator('gemini-health', 'error');
-      updateHealthIndicator('openai-health', 'error');
-    }
-  });
-}
+
 
 // Initialize status indicators
 function initStatusIndicators() {
