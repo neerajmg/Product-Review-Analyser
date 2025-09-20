@@ -57,7 +57,7 @@ function loadOptions() {
   return new Promise(resolve => {
     chrome.storage.sync.get(STORAGE_KEYS.OPTIONS, data => {
       const defaults = {
-        fallbackMode: true,
+        fallbackMode: false,
         apiKey: '',
         aiProvider: 'gemini',
         maxPagesCap: DEFAULT_MAX_PAGES_CAP,
@@ -145,7 +145,9 @@ async function realRewriteWithGemini(fullReviews, site) {
 
 async function rewriteWithGemini(reviews, site='') {
   const opts = await loadOptions();
+  console.log('PPC: rewriteWithGemini options:', { fallbackMode: opts.fallbackMode, hasApiKey: !!opts.apiKey, aiProvider: opts.aiProvider });
   if (opts.fallbackMode || !opts.apiKey) {
+    console.log('PPC: Using fallback mode - either fallbackMode is true or no API key');
     // Enhanced heuristic aspect summary instead of naive frequency
     return heuristicAspectSummary(reviews);
   }
@@ -218,9 +220,12 @@ async function analyzeCurrentTab(tabId) {
   if (!summary) {
     console.log('PPC: CACHE-MISS', cacheKey);
     const opts = await loadOptions();
+    console.log('PPC: analyzeCurrentTab options:', { fallbackMode: opts.fallbackMode, hasApiKey: !!opts.apiKey });
     if (opts.fallbackMode) {
+      console.log('PPC: Using localFallback due to fallbackMode = true');
       summary = localFallback(sanitized);
     } else {
+      console.log('PPC: Attempting AI summarization');
       // Rate limit
       const wait = Date.now() - lastGeminiRequestTs;
       if (wait < GEMINI_RATE_LIMIT_MS) await new Promise(res => setTimeout(res, GEMINI_RATE_LIMIT_MS - wait));
