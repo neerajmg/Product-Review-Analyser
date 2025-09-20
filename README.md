@@ -151,8 +151,6 @@ Works on **25+ major e-commerce platforms** plus any generic review site:
    - Click "Analyze Reviews"
    - Get instant pros/cons summary!
 
-![Setup Process](image/README/1758327436700.png)
-
 ## 🏗️ Architecture
 
 ### Core Components
