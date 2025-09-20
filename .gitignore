@@ -48,6 +48,11 @@ secrets.*
 # --- IDE / Editor Config ---
 .vscode/
 .idea/
+
+# --- Development and testing files (cleanup for open source) ---
+temp_test.mjs
+verify.js
+build_instructions.md
 *.iml
 .history/
 .fleet/
