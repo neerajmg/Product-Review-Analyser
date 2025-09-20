@@ -9,6 +9,14 @@
 
 Transform your online shopping experience with instant, unbiased insights from thousands of reviews across 25+ e-commerce platforms.
 
+## 🎬 Demo Video
+
+See the extension in action! Watch how it analyzes product reviews and generates AI-powered summaries:
+
+[![Demo Video](https://img.youtube.com/vi/RRXnPInGz8A/maxresdefault.jpg)](https://youtu.be/RRXnPInGz8A)
+
+**[🎥 Watch Full Demo on YouTube →](https://youtu.be/RRXnPInGz8A)**
+
 ---
 
 ## ⭐ Why Choose This Extension?
