@@ -13,9 +13,9 @@ Transform your online shopping experience with instant, unbiased insights from t
 
 See the extension in action! Watch how it analyzes product reviews and generates AI-powered summaries:
 
-[![Demo Video](https://img.youtube.com/vi/RRXnPInGz8A/maxresdefault.jpg)](https://youtu.be/RRXnPInGz8A)
+[![Demo Video](https://img.youtube.com/vi/JXsnGzWP9cQ/maxresdefault.jpg)](https://youtu.be/JXsnGzWP9cQ)
 
-**[🎥 Watch Full Demo on YouTube →](https://youtu.be/RRXnPInGz8A)**
+**[🎥 Watch Full Demo on YouTube →](https://youtu.be/JXsnGzWP9cQ)**
 
 ---
 
