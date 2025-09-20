@@ -150,12 +150,31 @@
     
     .ai-status {
       font-size: 11px;
-      color: #f59e0b;
       line-height: 1.3;
       text-align: center;
       max-width: 100%;
       font-weight: 500;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
     }
+    
+    .ai-status.warning { color: #f59e0b; }
+    .ai-status.success { color: #10b981; }
+    .ai-status.error { color: #ef4444; }
+    
+    .rate-limit-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #d1d5db;
+      transition: background 0.2s ease;
+    }
+    
+    .rate-limit-indicator.available { background: #10b981; }
+    .rate-limit-indicator.limited { background: #f59e0b; }
+    .rate-limit-indicator.error { background: #ef4444; }
     
     .health-indicator {
       width: 8px;
@@ -200,8 +219,9 @@
     <div id="results" class="results-section" hidden></div>
     
     <div class="footer">
-      <div id="apiKeyHelp" class="ai-status">
-        ⚠️ Please provide your AI service API keys in Settings for the extension to work perfectly
+      <div id="apiKeyHelp" class="ai-status warning">
+        <div id="rateLimitIndicator" class="rate-limit-indicator"></div>
+        <span id="statusMessage">⚠️ Please provide your AI service API keys in Settings for the extension to work perfectly</span>
       </div>
     </div>
   </div>
