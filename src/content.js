@@ -447,7 +447,7 @@ function showResultsOverlay(summary, reason) {
   // Extract and format overall rating
   const overallRating = extractOverallRating();
   const ratingDisplay = overallRating ? formatRatingDisplay(overallRating) : '';
-  const ratingHtml = ratingDisplay ? `<div style="font-size:16px; color:#ff6b35; margin-bottom:16px; font-weight:bold;">${escapeHtml(ratingDisplay)}</div>` : '';
+  const ratingHtml = ratingDisplay ? `<div style="font-size:16px; color:#ff6b35; margin-bottom:16px; font-weight:bold;">User Rating: ${escapeHtml(ratingDisplay)}</div>` : '';
   
   resultsOverlay.innerHTML = `
     <div class="ppc-panel">
