@@ -4,7 +4,6 @@ const deepCrawlBtn = document.getElementById('deepCrawlBtn');
 const btnText = document.getElementById('btnText');
 const statusEl = document.getElementById('status');
 const resultsEl = document.getElementById('results');
-const openOptionsLink = document.getElementById('openOptions');
 const openOptionsBtn = document.getElementById('openOptionsBtn');
 const healthDot = document.getElementById('healthDot');
 const clearCacheBtn = document.getElementById('clearCacheBtn');
@@ -31,13 +30,12 @@ if (clearCacheBtn) {
   });
 }
 
-// Settings button handlers
+// Settings button handler
 const openSettings = (e) => {
   e.preventDefault();
   chrome.runtime.openOptionsPage();
 };
 
-openOptionsLink.addEventListener('click', openSettings);
 if (openOptionsBtn) {
   openOptionsBtn.addEventListener('click', openSettings);
 }
